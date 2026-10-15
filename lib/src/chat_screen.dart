@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:spine_flutter/spine_flutter.dart' hide Color;
 
 import 'ai_services.dart';
+import 'fish_mcp_protocol.dart';
 import 'fish_mcp_service.dart';
 import 'continuous_asmr_page.dart';
 import 'auxiliary_llm_tasks.dart';
@@ -4738,7 +4739,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ? widget.controller.ttsProvider
           : TtsProvider.fishAudio;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${failedProvider.label} 语音生成失败，文本回复不受影响')),
+        SnackBar(
+          content: Text(
+            error is FishMcpException
+                ? '${failedProvider.label} 语音生成失败：${error.message}'
+                : '${failedProvider.label} 语音生成失败，文本回复不受影响',
+          ),
+        ),
       );
     }
   }
@@ -4756,6 +4763,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final provider = segment.isPrimary
         ? widget.controller.ttsProvider
         : TtsProvider.fishAudio;
+    var actualProvider = provider;
     final playbackFormat = provider == TtsProvider.mimo
         ? 'wav'
         : Platform.isAndroid
@@ -4790,11 +4798,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           model: widget.controller.fishMcpModel.trim().isEmpty
               ? null
               : widget.controller.fishMcpModel.trim(),
+          language: switch (widget.controller.characterReplyLanguage) {
+            AppLanguage.chinese => 'zh',
+            AppLanguage.japanese => 'ja',
+            AppLanguage.english => 'en',
+          },
           format: format,
           speed: speed,
         );
       } on Object catch (error) {
-        if (!widget.controller.fishMcpAutoFallback) rethrow;
+        RuntimeLog.instance.warning(
+          'TTS',
+          'Fish MCP 合成失败：${redactFishMcpText(error.toString())}',
+        );
+        if (!widget.controller.fishMcpAutoFallback ||
+            !(error is FishMcpException && error.allowsRestFallback)) {
+          rethrow;
+        }
         final fallbackKey = await _secretStore.readFishAudioKey();
         if (fallbackKey.isEmpty ||
             widget.controller.activeFishAudioReferenceId.isEmpty) {
@@ -4802,8 +4822,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         }
         RuntimeLog.instance.warning(
           'TTS',
-          'Fish MCP 失败，回退 Fish Audio REST：${error.runtimeType}',
+          'Fish MCP 未提交生成请求，按已启用的设置回退 Fish Audio REST：$error',
         );
+        actualProvider = TtsProvider.fishAudio;
         return _fishAudioClient.synthesize(
           apiKey: fallbackKey,
           referenceId: widget.controller.activeFishAudioReferenceId,
@@ -4903,7 +4924,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
     };
 
-    const maxAttempts = 2;
+    // A completed/uncertain MCP request must never be regenerated merely
+    // because local decoding or duration validation failed.
+    final maxAttempts = provider == TtsProvider.fishAudioMcp ? 1 : 2;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       var path = await synthesizeOnce();
       _temporarySpeechPaths.add(path);
@@ -4928,6 +4951,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final bytes = await File(path).readAsBytes();
         final envelope = await loadSpeechEnvelope(path, bytes);
         final actualDuration = ttsAudioDuration(envelope);
+        if (provider == TtsProvider.fishAudioMcp &&
+            (bytes.isEmpty ||
+                (actualDuration != null && actualDuration <= Duration.zero))) {
+          throw FishMcpException(
+            stage: 'audio_validation',
+            code: 'audio_decode_failed',
+            message: '语音已由 ${actualProvider.label} 返回，但音频为空或无法解码；未自动重新生成。',
+            generationSubmitted: true,
+          );
+        }
         if (actualDuration != null &&
             isTtsAudioOverlong(plainText, actualDuration, asmr: asmr)) {
           throw TtsAudioTooLongException(
@@ -4937,7 +4970,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         }
         RuntimeLog.instance.info(
           'TTS',
-          '音频文件已准备 provider=${provider.label}, '
+          '音频文件已准备 provider=${actualProvider.label}, '
+              'selectedProvider=${provider.label}, '
+              'actualProvider=${actualProvider.label}, '
               'format=${detectAudioContainerExtension(bytes)}, bytes=${bytes.length}, '
               'durationMs=${actualDuration?.inMilliseconds ?? 'unknown'}, '
               'file=${path.split(Platform.pathSeparator).last}',
@@ -4946,6 +4981,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       } on TtsAudioTooLongException catch (error) {
         await _deleteTemporarySpeech(path);
         if (attempt + 1 >= maxAttempts) {
+          if (provider == TtsProvider.fishAudioMcp) {
+            throw FishMcpException(
+              stage: 'audio_validation',
+              code: 'audio_too_long',
+              message:
+                  '语音已由 ${actualProvider.label} 返回，但音频时长异常'
+                  '（${error.actual.inSeconds} 秒，文本上限约 ${error.maximum.inSeconds} 秒）；未自动重新生成。',
+              generationSubmitted: true,
+            );
+          }
           throw AiServiceException(
             'TTS 音频时长异常（${error.actual.inSeconds} 秒，文本上限约 ${error.maximum.inSeconds} 秒），重新请求后仍未通过校验',
           );

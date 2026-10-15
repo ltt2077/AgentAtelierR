@@ -20,6 +20,7 @@ import 'frame_rate_controller.dart';
 import 'runtime_log.dart';
 import 'service_api_backup.dart';
 import 'fish_mcp_service.dart';
+import 'fish_mcp_protocol.dart';
 export 'runtime_log_screen.dart';
 import 'platform_slider.dart';
 import 'glass_ui.dart';
@@ -1327,9 +1328,9 @@ class SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('AgentAtelierR'),
                   subtitle: Text(
                     language.text(
-                      '版本 1.0.4 正式版',
-                      'Version 1.0.4 Release',
-                      'バージョン 1.0.4 正式版',
+                      '版本 1.0.4.1 MCP FishAudio',
+                      'Version 1.0.4.1 MCP FishAudio',
+                      'バージョン 1.0.4.1 MCP FishAudio',
                     ),
                   ),
                 ),
@@ -2153,7 +2154,14 @@ class SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _showFishMcpSettings(BuildContext context) async {
     final service = FishMcpService.instance;
-    final model = TextEditingController(text: controller.fishMcpModel);
+    var model = controller.fishMcpModel;
+    final modelOptions = <String>{
+      '',
+      's2.1-pro-free',
+      's2.1-pro',
+      'drama-3',
+      if (model.isNotEmpty) model,
+    };
     final voice = TextEditingController(text: controller.fishMcpVoice);
     var autoFallback = controller.fishMcpAutoFallback;
     var busy = false;
@@ -2161,147 +2169,297 @@ class SettingsScreenState extends State<SettingsScreen> {
     final result = await _openDetailPage<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final contentWidth = (MediaQuery.sizeOf(context).width - 32).clamp(
-            0.0,
-            728.0,
-          );
-          return SettingsDetailPage(
-            title: const Text('Fish Audio MCP'),
-            content: SizedBox(
-              width: contentWidth,
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SettingsOptionCard(
-                      child: ListTile(
-                        leading: Icon(
-                          service.isReady
-                              ? Icons.check_circle_outline
-                              : Icons.cloud_outlined,
-                        ),
-                        title: Text('状态：${service.statusLabel}'),
-                        subtitle: Text(
-                          service.errorMessage ??
-                              '官方端点：${FishMcpService.endpoint}\n'
-                                  '需要 Fish Audio 账号 OAuth 授权。',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: voice,
-                      decoration: const InputDecoration(
-                        labelText: '音色标识（按 tools/list 实际 schema）',
-                        hintText: '可留空，使用账号默认音色',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: model,
-                      decoration: const InputDecoration(
-                        labelText: '模型（仅发送 schema 支持的字段）',
-                        hintText: 'Drama 3 需 tools/list 明确支持后再填写',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    SwitchListTile(
-                      value: autoFallback,
-                      onChanged: (value) =>
-                          setDialogState(() => autoFallback = value),
-                      title: const Text('MCP 失败时允许回退现有 Fish API'),
-                      subtitle: const Text('不会把 OAuth 凭据导出到普通数据备份。'),
-                    ),
-                    const SizedBox(height: 8),
-                    FilledButton.icon(
-                      onPressed: busy
-                          ? null
-                          : () async {
-                              setDialogState(() {
-                                busy = true;
-                                localError = null;
-                              });
-                              await service.connect();
-                              if (context.mounted) {
-                                setDialogState(() {
-                                  busy = false;
-                                  localError = service.errorMessage;
-                                });
-                              }
-                            },
-                      icon: busy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.login),
-                      label: Text(
-                        service.state == FishMcpConnectionState.authenticating
-                            ? '已打开授权页，完成后重新探测'
-                            : '登录并探测 tools/list',
-                      ),
-                    ),
-                    if (service.tools.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text('已发现工具（${service.tools.length}）'),
-                      const SizedBox(height: 4),
-                      for (final tool in service.tools)
-                        ListTile(
-                          dense: true,
+        builder: (context, setDialogState) => ListenableBuilder(
+          listenable: service,
+          builder: (context, _) {
+            final selectedTool = service.selectedTtsTool;
+            final properties = selectedTool == null
+                ? const <String, dynamic>{}
+                : fishMcpSchemaProperties(selectedTool.inputSchema);
+            String? fieldName(List<String> names) {
+              for (final name in names) {
+                if (properties.containsKey(name)) return name;
+              }
+              return null;
+            }
+
+            String describeField(String? name, String kind) {
+              if (selectedTool == null) {
+                return '请先探测工具，再确认$kind字段。';
+              }
+              if (name == null) {
+                if (kind == '模型') {
+                  return '当前 TTS 工具未声明模型字段。下拉选项可手动配置，MCP 生成前仍会校验真实 schema；选项不代表工具支持。';
+                }
+                return '当前 TTS 工具未声明$kind字段，使用服务端配置；此项不会发送。';
+              }
+              final definition = properties[name];
+              final values = definition is Map ? definition['enum'] : null;
+              return values is List && values.isNotEmpty
+                  ? '字段：$name；允许值：${values.join('、')}'
+                  : '字段：$name；未声明可选值，服务端仍会校验实际可用性。';
+            }
+
+            final modelField = fieldName(['model', 'model_id', 'modelId']);
+            final voiceField = fieldName([
+              'voice',
+              'voice_id',
+              'speaker',
+              'reference_id',
+            ]);
+            final connecting =
+                busy ||
+                service.state == FishMcpConnectionState.connecting ||
+                service.state == FishMcpConnectionState.authenticating;
+            Future<void> copyText(String text) async {
+              await Clipboard.setData(ClipboardData(text: text));
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('已复制')));
+            }
+
+            final contentWidth = (MediaQuery.sizeOf(context).width - 32).clamp(
+              0.0,
+              728.0,
+            );
+            return SettingsDetailPage(
+              title: const Text('Fish Audio MCP'),
+              content: SizedBox(
+                width: contentWidth,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SettingsOptionCard(
+                        child: ListTile(
                           leading: Icon(
-                            tool.name == service.ttsToolName
-                                ? Icons.record_voice_over
-                                : Icons.extension_outlined,
+                            service.isReady
+                                ? Icons.check_circle_outline
+                                : Icons.cloud_outlined,
                           ),
-                          title: Text(tool.name),
-                          subtitle: Text(tool.description ?? '无描述'),
+                          title: Text('状态：${service.statusLabel}'),
+                          subtitle: Text(
+                            service.errorMessage ??
+                                '官方端点：${FishMcpService.endpoint}\n'
+                                    '需要 Fish Audio 账号 OAuth 授权。',
+                          ),
                         ),
-                    ],
-                    if (service.lastDiscoveryAt != null)
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: voice,
+                        enabled: voiceField != null,
+                        decoration: const InputDecoration(
+                          labelText: '音色标识（按 tools/list 实际 schema）',
+                          hintText: '留空时交由官方工具处理',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
                       Text(
-                        'Drama 3：${service.drama3Supported ? '已在 MCP schema 中发现' : '未在 MCP schema 中发现'}',
+                        describeField(voiceField, '音色'),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                    if (localError != null) ...[
                       const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('fish-mcp-model-$model'),
+                        initialValue: model,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: '模型',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: [
+                          for (final option in modelOptions)
+                            DropdownMenuItem(
+                              value: option,
+                              child: Text(
+                                option.isEmpty ? '服务默认（不指定模型）' : option,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setDialogState(() => model = value);
+                          }
+                        },
+                      ),
                       Text(
-                        localError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                        describeField(modelField, '模型'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (selectedTool != null &&
+                          modelField == null &&
+                          model.trim().isNotEmpty) ...[
+                        Text(
+                          '所选模型不受当前工具 schema 支持。使用 MCP 时可选择服务默认，避免生成请求被本地校验阻止；已启用的 Fish API 回退仍按原设置处理。',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => setDialogState(() => model = ''),
+                          icon: const Icon(Icons.clear),
+                          label: const Text('清空未受支持的模型设置'),
+                        ),
+                      ],
+                      SwitchListTile(
+                        value: autoFallback,
+                        onChanged: (value) =>
+                            setDialogState(() => autoFallback = value),
+                        title: const Text('MCP 失败时允许回退现有 Fish API'),
+                        subtitle: const Text(
+                          '默认关闭。开启后，仅在 MCP 尚未提交生成、且本地准备或参数校验失败时回退。使用现有 Fish API Key、模型和音色配置，可能消耗独立的开发者 API 余额；Plus 会员权益不代表开发者 API 余额。OAuth 凭据不会导出到普通备份。',
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      FilledButton.icon(
+                        onPressed: connecting
+                            ? null
+                            : () async {
+                                setDialogState(() {
+                                  busy = true;
+                                  localError = null;
+                                });
+                                try {
+                                  await service.connect();
+                                } on Object {
+                                  if (context.mounted) {
+                                    setDialogState(() {
+                                      localError = '连接未完成，请复制诊断查看具体原因。';
+                                    });
+                                  }
+                                } finally {
+                                  if (context.mounted) {
+                                    setDialogState(() => busy = false);
+                                  }
+                                }
+                              },
+                        icon: busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.login),
+                        label: Text(
+                          service.state == FishMcpConnectionState.authenticating
+                              ? '等待浏览器授权（完成后自动刷新）'
+                              : '登录并探测 tools/list（不生成语音）',
+                        ),
+                      ),
+                      if (service.tools.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text('已发现工具（${service.tools.length}）'),
+                        const SizedBox(height: 4),
+                        for (final tool in service.tools)
+                          ExpansionTile(
+                            key: ValueKey('fish-mcp-tool-${tool.name}'),
+                            leading: Icon(
+                              tool.name == service.ttsToolName
+                                  ? Icons.record_voice_over
+                                  : Icons.extension_outlined,
+                            ),
+                            title: Text(tool.name),
+                            subtitle: Text(tool.description ?? '无描述'),
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  12,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    OutlinedButton.icon(
+                                      onPressed: () => copyText(
+                                        const JsonEncoder.withIndent('  ')
+                                            .convert(tool.toJson()),
+                                      ),
+                                      icon: const Icon(Icons.copy, size: 18),
+                                      label: const Text('复制工具与完整 inputSchema'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    SelectableText(
+                                      const JsonEncoder.withIndent('  ')
+                                          .convert(tool.inputSchema),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
+                      if (service.lastDiscoveryAt != null)
+                        Text(
+                          service.drama3Supported
+                              ? 'Drama 3：当前 TTS 工具的模型 schema 声明支持；实际权益与生成能力仍由服务端校验。'
+                              : 'Drama 3：当前 TTS 工具未明确声明支持。其他工具描述中出现名称不代表当前 TTS 可使用该模型。',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => copyText(service.diagnosticReport),
+                        icon: const Icon(Icons.copy, size: 18),
+                        label: const Text('复制连接 / 错误诊断（已脱敏）'),
+                      ),
+                      if (localError != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          localError!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  await service.logout();
-                  if (context.mounted) setDialogState(() {});
-                },
-                child: const Text('退出授权'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('保存并使用 MCP'),
-              ),
-            ],
-          );
-        },
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    await service.disconnect();
+                    if (context.mounted) {
+                      setDialogState(() {
+                        busy = false;
+                        localError = null;
+                      });
+                    }
+                  },
+                  child: const Text('断开连接'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await service.logout();
+                    if (context.mounted) setDialogState(() {});
+                  },
+                  child: const Text('退出授权'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('保存并使用 MCP'),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
     if (result != true) return;
     controller.configureFishMcp(
-      model: model.text,
+      model: model,
       voice: voice.text,
       autoFallback: autoFallback,
     );

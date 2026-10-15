@@ -1,0 +1,257 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:ryza_chat_mvp/src/app_controller.dart';
+import 'package:ryza_chat_mvp/src/fish_mcp_service.dart';
+import 'package:ryza_chat_mvp/src/settings_screen.dart';
+
+void main() {
+  final service = FishMcpService.instance;
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      'fish_mcp_client_id_v1': 'local-widget-test-client',
+    });
+    await service.disconnect(clearError: true);
+    service.lastDiscoveryAt = null;
+  });
+
+  tearDown(() async {
+    await service.disconnect(clearError: true);
+    service.lastDiscoveryAt = null;
+  });
+
+  Future<AppController> openSettings(WidgetTester tester) async {
+    final controller = (await tester.runAsync(AppController.load))!;
+    addTearDown(controller.dispose);
+    tester.view.physicalSize = const Size(360, 850);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsScreen(
+          controller: controller,
+          onMenuPressed: () {},
+          initialSection: SettingsSection.audio,
+        ),
+      ),
+    );
+    final entry = find.byKey(const ValueKey('tts-settings-fishAudioMcp'));
+    await tester.scrollUntilVisible(
+      entry,
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    return controller;
+  }
+
+  void discover({required Map<String, dynamic> schema}) {
+    service.tools = [
+      FishMcpToolInfo(
+        name: 'text_to_speech',
+        description: 'Test tool; no network request is made.',
+        inputSchema: schema,
+      ),
+    ];
+    service.ttsToolName = 'text_to_speech';
+    service.state = FishMcpConnectionState.toolsDiscovered;
+    service.lastDiscoveryAt = DateTime.utc(2026, 10, 15);
+  }
+
+  testWidgets('OAuth state changes refresh MCP settings without another tap', (
+    tester,
+  ) async {
+    await openSettings(tester);
+    expect(find.text('状态：未连接'), findsOneWidget);
+    // A saved mock client ID avoids registration; launchLogin false avoids
+    // opening a browser. This only prepares local PKCE state.
+    await tester.runAsync(() => service.beginAuthorization(launchLogin: false));
+    await tester.pump();
+    expect(find.text('状态：等待 Fish Audio 授权'), findsOneWidget);
+    expect(find.text('等待浏览器授权（完成后自动刷新）'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MCP settings follows asynchronous connection notifications', (
+    tester,
+  ) async {
+    discover(
+      schema: {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string'},
+        },
+      },
+    );
+    await openSettings(tester);
+    expect(find.text('状态：工具已探测'), findsOneWidget);
+    final model = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const ValueKey('fish-mcp-model-')),
+    );
+    expect(model.onChanged, isNotNull);
+    expect(find.textContaining('未声明模型字段'), findsOneWidget);
+
+    // A service notification outside this route (such as an OAuth callback)
+    // must rebuild it without another user tap.
+    await service.disconnect();
+    await tester.pump();
+    expect(find.text('状态：未连接'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('fish-mcp-tool-text_to_speech')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MCP model dropdown keeps presets selectable without schema', (
+    tester,
+  ) async {
+    discover(
+      schema: {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string'},
+        },
+      },
+    );
+    final controller = await openSettings(tester);
+    final dropdown = find.byKey(const ValueKey('fish-mcp-model-'));
+    await tester.ensureVisible(dropdown);
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    for (final label in [
+      '服务默认（不指定模型）',
+      's2.1-pro-free',
+      's2.1-pro',
+      'drama-3',
+    ]) {
+      expect(find.text(label).hitTestable(), findsOneWidget);
+    }
+    await tester.tap(find.text('drama-3').hitTestable());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('选项不代表工具支持'), findsOneWidget);
+    await tester.tap(find.text('保存并使用 MCP'));
+    await tester.pumpAndSettle();
+    expect(controller.fishMcpModel, 'drama-3');
+    expect(controller.fishMcpAutoFallback, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MCP dropdown preserves a previously saved custom model', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'fish_mcp_model': 'custom-model'});
+    final controller = await openSettings(tester);
+    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const ValueKey('fish-mcp-model-custom-model')),
+    );
+    expect(dropdown.initialValue, 'custom-model');
+    final button = tester.widget<DropdownButton<String>>(
+      find.descendant(
+        of: find.byKey(const ValueKey('fish-mcp-model-custom-model')),
+        matching: find.byType(DropdownButton<String>),
+      ),
+    );
+    expect(button.items!.map((item) => item.value), [
+      '',
+      's2.1-pro-free',
+      's2.1-pro',
+      'drama-3',
+      'custom-model',
+    ]);
+    await tester.tap(find.text('保存并使用 MCP'));
+    await tester.pumpAndSettle();
+    expect(controller.fishMcpModel, 'custom-model');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unsupported stored model can be cleared before saving', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'fish_mcp_model': 'drama-3'});
+    discover(
+      schema: {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string'},
+        },
+      },
+    );
+    final controller = await openSettings(tester);
+    final clear = find.text('清空未受支持的模型设置');
+    await tester.ensureVisible(clear);
+    await tester.tap(clear);
+    await tester.pump();
+    await tester.tap(find.text('保存并使用 MCP'));
+    await tester.pumpAndSettle();
+    expect(controller.fishMcpModel, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MCP tool schema is expandable and copied without a tool call', (
+    tester,
+  ) async {
+    final schema = <String, dynamic>{
+      'type': 'object',
+      'properties': {
+        'text': {'type': 'string'},
+        'voice_id': {'type': 'string'},
+        'model': {
+          'type': 'string',
+          'enum': ['s2-pro'],
+        },
+      },
+      'required': ['text'],
+    };
+    discover(schema: schema);
+    await openSettings(tester);
+    expect(find.text('字段：model；允许值：s2-pro'), findsOneWidget);
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.widgetWithText(SwitchListTile, 'MCP 失败时允许回退现有 Fish API'),
+          )
+          .value,
+      isFalse,
+    );
+    final tile = find.byKey(const ValueKey('fish-mcp-tool-text_to_speech'));
+    await tester.ensureVisible(tile);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    final copy = find.text('复制工具与完整 inputSchema');
+    await tester.ensureVisible(copy);
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+    await tester.tap(copy);
+    await tester.pump();
+    final decoded = jsonDecode(copied!) as Map<String, dynamic>;
+    expect(decoded['name'], 'text_to_speech');
+    expect(decoded['inputSchema'], schema);
+    expect(find.textContaining('未明确声明支持'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+}

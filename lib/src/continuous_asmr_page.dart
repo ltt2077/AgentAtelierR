@@ -11,6 +11,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'app_controller.dart';
 import 'app_localization.dart';
 import 'ai_services.dart';
+import 'fish_mcp_protocol.dart';
 import 'fish_mcp_service.dart';
 import 'chat_segments.dart';
 import 'mimo_tts_client.dart';
@@ -317,6 +318,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         _wakeBuffer();
       }
     } on Object catch (error) {
+      RuntimeLog.instance.error('TTS ASMR', error);
       if (_isCurrent(generation)) _synthesisError = error;
     } finally {
       if (generation == _generation) {
@@ -326,6 +328,8 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           setState(
             () => _status = _synthesisError == null
                 ? t('语音已准备好', 'Audio is ready', '音声の準備ができました')
+                : _synthesisError is FishMcpException
+                ? (_synthesisError! as FishMcpException).toString()
                 : _synthesisError is _InvalidAsmrAudio
                 ? t(
                     '音频准备失败：文件损坏或无法解码，重新生成后仍未通过校验，请重试',
@@ -779,8 +783,9 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     required bool stereoEnabled,
     required TtsStereoPosition stereoPosition,
   }) async {
-    final playbackFormat =
-        c.ttsProvider == TtsProvider.mimo || !Platform.isAndroid
+    final provider = c.ttsProvider;
+    var actualProvider = provider;
+    final playbackFormat = provider == TtsProvider.mimo || !Platform.isAndroid
         ? 'wav'
         : 'mp3';
     final plainText = ttsText.replaceAll(RegExp(r'\[[^\]]*\]'), '');
@@ -799,19 +804,32 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           text: text,
           voice: c.fishMcpVoice.trim().isEmpty ? null : c.fishMcpVoice.trim(),
           model: c.fishMcpModel.trim().isEmpty ? null : c.fishMcpModel.trim(),
+          language: switch (c.characterReplyLanguage) {
+            AppLanguage.chinese => 'zh',
+            AppLanguage.japanese => 'ja',
+            AppLanguage.english => 'en',
+          },
           format: playbackFormat,
           speed: c.fishAudioSpeed,
         );
       } on Object catch (error) {
-        if (!c.fishMcpAutoFallback) rethrow;
+        RuntimeLog.instance.warning(
+          'TTS',
+          'Fish MCP ASMR 合成失败：${redactFishMcpText(error.toString())}',
+        );
+        if (!c.fishMcpAutoFallback ||
+            !(error is FishMcpException && error.allowsRestFallback)) {
+          rethrow;
+        }
         final fallbackKey = await const SecretStore().readFishAudioKey();
         if (fallbackKey.isEmpty || c.activeFishAudioReferenceId.isEmpty) {
           rethrow;
         }
         RuntimeLog.instance.warning(
           'TTS',
-          'Fish MCP 失败，ASMR 回退 Fish Audio REST：${error.runtimeType}',
+          'Fish MCP 未提交生成请求，ASMR 按已启用的设置回退 Fish Audio REST：$error',
         );
+        actualProvider = TtsProvider.fishAudio;
         return FishAudioClient().synthesize(
           apiKey: fallbackKey,
           referenceId: c.activeFishAudioReferenceId,
@@ -826,7 +844,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
       }
     }
 
-    Future<String> synthesizeOnce() => switch (c.ttsProvider) {
+    Future<String> synthesizeOnce() => switch (provider) {
       TtsProvider.fishAudio => FishAudioClient().synthesize(
         apiKey: apiKey,
         referenceId: c.activeFishAudioReferenceId,
@@ -887,7 +905,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         voiceProfileId: c.localTtsVoiceProfileId,
       ),
     };
-    const maxAttempts = 2;
+    final maxAttempts = provider == TtsProvider.fishAudioMcp ? 1 : 2;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       var path = await synthesizeOnce();
       try {
@@ -921,6 +939,16 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           );
           await _deleteClipFile(path);
           if (attempt + 1 >= maxAttempts) {
+            if (provider == TtsProvider.fishAudioMcp) {
+              throw FishMcpException(
+                stage: 'audio_validation',
+                code: 'audio_too_long',
+                message:
+                    'ASMR 语音已由 ${actualProvider.label} 返回，但音频时长异常'
+                    '（${actualDuration.inSeconds} 秒，文本上限约 ${maximum.inSeconds} 秒）；未自动重新生成。',
+                generationSubmitted: true,
+              );
+            }
             throw TtsAudioTooLongException(
               actual: actualDuration,
               maximum: maximum,
@@ -933,10 +961,28 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           );
           continue;
         }
+        RuntimeLog.instance.info(
+          'TTS',
+          'ASMR 音频文件已准备 provider=${actualProvider.label}, '
+              'selectedProvider=${provider.label}, '
+              'actualProvider=${actualProvider.label}, '
+              'durationMs=${actualDuration.inMilliseconds}, bytes=${bytes.length}',
+        );
         return path;
       } on _InvalidAsmrAudio {
         await _deleteClipFile(path);
-        if (attempt + 1 >= maxAttempts) rethrow;
+        if (attempt + 1 >= maxAttempts) {
+          if (provider == TtsProvider.fishAudioMcp) {
+            throw FishMcpException(
+              stage: 'audio_validation',
+              code: 'audio_decode_failed',
+              message:
+                  'ASMR 语音已由 ${actualProvider.label} 返回，但音频为空或无法解码；未自动重新生成。',
+              generationSubmitted: true,
+            );
+          }
+          rethrow;
+        }
         RuntimeLog.instance.warning(
           'TTS',
           'ASMR 音频为空或无法解码，丢弃并重新请求：attempt=${attempt + 1}/$maxAttempts',

@@ -1,6 +1,7 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
+#include <app_links/app_links_plugin_c_api.h>
 
 #include <string>
 
@@ -40,6 +41,13 @@ void RegisterFishMcpProtocol() {
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // Browser OAuth callbacks launch the URL protocol command as another
+  // process. Forward the link to the running instance, which owns the PKCE
+  // verifier and state, before creating a second Flutter engine.
+  if (SendAppLinkToInstance()) {
+    return EXIT_SUCCESS;
+  }
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {

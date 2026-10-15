@@ -1058,7 +1058,7 @@ class AppController extends ChangeNotifier {
   double fishAudioSpeed = 1.0;
   String fishMcpModel = '';
   String fishMcpVoice = '';
-  bool fishMcpAutoFallback = true;
+  bool fishMcpAutoFallback = false;
   String dashScopeTtsBaseUrl =
       'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
   String dashScopeTtsModel = 'qwen3-tts-flash';
@@ -1351,7 +1351,7 @@ class AppController extends ChangeNotifier {
     fishMcpModel = _preferences.getString('fish_mcp_model') ?? '';
     fishMcpVoice = _preferences.getString('fish_mcp_voice') ?? '';
     fishMcpAutoFallback =
-        _preferences.getBool('fish_mcp_auto_fallback') ?? true;
+        _preferences.getBool('fish_mcp_auto_fallback') ?? false;
     dashScopeTtsBaseUrl =
         _preferences.getString('dashscope_tts_base_url') ?? dashScopeTtsBaseUrl;
     dashScopeTtsModel =

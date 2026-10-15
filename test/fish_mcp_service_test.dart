@@ -14,7 +14,12 @@ void main() {
     await service.disconnect(clearError: true);
     await expectLater(
       service.synthesize(text: 'こんにちは'),
-      throwsA(isA<StateError>()),
+      throwsA(
+        isA<FishMcpException>()
+            .having((error) => error.stage, 'stage', 'preflight')
+            .having((error) => error.code, 'code', 'not_ready')
+            .having((error) => error.generationSubmitted, 'submitted', false),
+      ),
     );
   });
 }

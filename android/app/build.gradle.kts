@@ -40,7 +40,8 @@ android {
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        // Public release uses four segments; pubspec keeps Flutter's semver.
+        versionName = "1.0.4.1"
         if (relayPushDefines["RELAY_PUSH_PROVIDER"] == "fcm") {
             mapOf(
                 "google_api_key" to "RELAY_FCM_API_KEY",
