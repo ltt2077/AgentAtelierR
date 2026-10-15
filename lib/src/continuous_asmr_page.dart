@@ -793,6 +793,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     const voiceDirection =
         'Speak softly in an intimate whisper, slowly with gentle breaths.';
     Future<String> synthesizeMcp() async {
+      final voice = c.fishMcpVoiceForMode(asmr: true).trim();
       final text = applyFishEmotionIntensityPerSentence(
         ttsText,
         emotionIntensity,
@@ -802,7 +803,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
       try {
         return await FishMcpService.instance.synthesize(
           text: text,
-          voice: c.fishMcpVoice.trim().isEmpty ? null : c.fishMcpVoice.trim(),
+          voice: voice.isEmpty ? null : voice,
           model: c.fishMcpModel.trim().isEmpty ? null : c.fishMcpModel.trim(),
           language: switch (c.characterReplyLanguage) {
             AppLanguage.chinese => 'zh',

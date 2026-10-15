@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ryza_chat_mvp/src/app_controller.dart';
+import 'package:ryza_chat_mvp/src/chat_segments.dart';
 import 'package:ryza_chat_mvp/src/fish_mcp_service.dart';
 import 'package:ryza_chat_mvp/src/settings_screen.dart';
 
@@ -99,7 +100,7 @@ void main() {
       find.byKey(const ValueKey('fish-mcp-model-')),
     );
     expect(model.onChanged, isNotNull);
-    expect(find.textContaining('未声明模型字段'), findsOneWidget);
+    expect(find.text('所选模型直接发送至云端，由服务判断可用性。'), findsOneWidget);
 
     // A service notification outside this route (such as an OAuth callback)
     // must rebuild it without another user tap.
@@ -139,7 +140,8 @@ void main() {
     }
     await tester.tap(find.text('drama-3').hitTestable());
     await tester.pumpAndSettle();
-    expect(find.textContaining('选项不代表工具支持'), findsOneWidget);
+    expect(find.text('所选模型直接发送至云端，由服务判断可用性。'), findsOneWidget);
+    expect(find.text('清空未受支持的模型设置'), findsNothing);
     await tester.tap(find.text('保存并使用 MCP'));
     await tester.pumpAndSettle();
     expect(controller.fishMcpModel, 'drama-3');
@@ -175,10 +177,13 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('unsupported stored model can be cleared before saving', (
+  testWidgets('stored model and editable voice survive missing schema fields', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({'fish_mcp_model': 'drama-3'});
+    SharedPreferences.setMockInitialValues({
+      'fish_mcp_model': 'drama-3',
+      'fish_mcp_voice': 'stored-voice-id',
+    });
     discover(
       schema: {
         'type': 'object',
@@ -188,13 +193,55 @@ void main() {
       },
     );
     final controller = await openSettings(tester);
-    final clear = find.text('清空未受支持的模型设置');
-    await tester.ensureVisible(clear);
-    await tester.tap(clear);
-    await tester.pump();
+    final voice = find.byKey(const ValueKey('fish-mcp-normal-voice'));
+    expect(tester.widget<TextField>(voice).enabled, isNot(false));
+    expect(tester.widget<TextField>(voice).controller!.text, 'stored-voice-id');
+    expect(find.text('清空未受支持的模型设置'), findsNothing);
+    await tester.enterText(voice, 'updated-voice-id');
     await tester.tap(find.text('保存并使用 MCP'));
     await tester.pumpAndSettle();
-    expect(controller.fishMcpModel, isEmpty);
+    expect(controller.fishMcpModel, 'drama-3');
+    expect(controller.fishMcpVoice, 'updated-voice-id');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'MCP saves independent normal and ASMR voices and shows Klaudia',
+    (tester) async {
+      final controller = await openSettings(tester);
+      final voice = find.byKey(const ValueKey('fish-mcp-normal-voice'));
+      final asmrVoice = find.byKey(const ValueKey('fish-mcp-asmr-voice'));
+      expect(tester.widget<TextField>(voice).enabled, isNot(false));
+      expect(tester.widget<TextField>(asmrVoice).enabled, isNot(false));
+      expect(find.text(klaudiaFishAudioReferenceId), findsOneWidget);
+      expect(find.text('ASMR 音色留空时沿用普通音色。'), findsOneWidget);
+      await tester.enterText(voice, 'normal-voice-id');
+      await tester.enterText(asmrVoice, 'asmr-voice-id');
+      await tester.tap(find.text('保存并使用 MCP'));
+      await tester.pumpAndSettle();
+      expect(controller.fishMcpVoice, 'normal-voice-id');
+      expect(controller.fishMcpAsmrVoice, 'asmr-voice-id');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('MCP preserves a saved ASMR voice without schema restrictions', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'fish_mcp_voice': 'normal-voice-id',
+      'fish_mcp_asmr_voice': 'stored-asmr-id',
+    });
+    final controller = await openSettings(tester);
+    final asmrVoice = find.byKey(const ValueKey('fish-mcp-asmr-voice'));
+    expect(
+      tester.widget<TextField>(asmrVoice).controller!.text,
+      'stored-asmr-id',
+    );
+    await tester.tap(find.text('保存并使用 MCP'));
+    await tester.pumpAndSettle();
+    expect(controller.fishMcpVoice, 'normal-voice-id');
+    expect(controller.fishMcpAsmrVoice, 'stored-asmr-id');
     expect(tester.takeException(), isNull);
   });
 
@@ -215,7 +262,10 @@ void main() {
     };
     discover(schema: schema);
     await openSettings(tester);
-    expect(find.text('字段：model；允许值：s2-pro'), findsOneWidget);
+    expect(
+      find.text('字段：model；schema 列出：s2-pro；实际可用性由云端服务判断。'),
+      findsOneWidget,
+    );
     expect(
       tester
           .widget<SwitchListTile>(
@@ -251,7 +301,7 @@ void main() {
     final decoded = jsonDecode(copied!) as Map<String, dynamic>;
     expect(decoded['name'], 'text_to_speech');
     expect(decoded['inputSchema'], schema);
-    expect(find.textContaining('未明确声明支持'), findsOneWidget);
+    expect(find.textContaining('仍可选择并请求云端服务'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

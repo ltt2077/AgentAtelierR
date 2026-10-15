@@ -2163,6 +2163,7 @@ class SettingsScreenState extends State<SettingsScreen> {
       if (model.isNotEmpty) model,
     };
     final voice = TextEditingController(text: controller.fishMcpVoice);
+    final asmrVoice = TextEditingController(text: controller.fishMcpAsmrVoice);
     var autoFallback = controller.fishMcpAutoFallback;
     var busy = false;
     String? localError;
@@ -2185,19 +2186,21 @@ class SettingsScreenState extends State<SettingsScreen> {
 
             String describeField(String? name, String kind) {
               if (selectedTool == null) {
-                return '请先探测工具，再确认$kind字段。';
+                return kind == '模型'
+                    ? '所选模型直接发送至云端，由服务判断可用性。'
+                    : '音色标识可直接填写，留空时使用服务默认音色。';
               }
               if (name == null) {
                 if (kind == '模型') {
-                  return '当前 TTS 工具未声明模型字段。下拉选项可手动配置，MCP 生成前仍会校验真实 schema；选项不代表工具支持。';
+                  return '所选模型直接发送至云端，由服务判断可用性。';
                 }
-                return '当前 TTS 工具未声明$kind字段，使用服务端配置；此项不会发送。';
+                return '音色标识可直接填写，由云端服务处理。';
               }
               final definition = properties[name];
               final values = definition is Map ? definition['enum'] : null;
               return values is List && values.isNotEmpty
-                  ? '字段：$name；允许值：${values.join('、')}'
-                  : '字段：$name；未声明可选值，服务端仍会校验实际可用性。';
+                  ? '字段：$name；schema 列出：${values.join('、')}；实际可用性由云端服务判断。'
+                  : '字段：$name；实际可用性由云端服务判断。';
             }
 
             final modelField = fieldName(['model', 'model_id', 'modelId']);
@@ -2247,10 +2250,10 @@ class SettingsScreenState extends State<SettingsScreen> {
                       ),
                       const SizedBox(height: 8),
                       TextField(
+                        key: const ValueKey('fish-mcp-normal-voice'),
                         controller: voice,
-                        enabled: voiceField != null,
                         decoration: const InputDecoration(
-                          labelText: '音色标识（按 tools/list 实际 schema）',
+                          labelText: '普通音色 ID',
                           hintText: '留空时交由官方工具处理',
                           border: OutlineInputBorder(),
                         ),
@@ -2258,6 +2261,27 @@ class SettingsScreenState extends State<SettingsScreen> {
                       Text(
                         describeField(voiceField, '音色'),
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        key: const ValueKey('fish-mcp-asmr-voice'),
+                        controller: asmrVoice,
+                        decoration: const InputDecoration(
+                          labelText: 'ASMR 音色 ID',
+                          hintText: '留空时沿用普通音色',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      Text(
+                        'ASMR 音色留空时沿用普通音色。',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      const SettingsOptionCard(
+                        child: ListTile(
+                          title: Text('科洛蒂娅固定音色 ID'),
+                          subtitle: SelectableText(klaudiaFishAudioReferenceId),
+                        ),
                       ),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<String>(
@@ -2287,28 +2311,13 @@ class SettingsScreenState extends State<SettingsScreen> {
                         describeField(modelField, '模型'),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      if (selectedTool != null &&
-                          modelField == null &&
-                          model.trim().isNotEmpty) ...[
-                        Text(
-                          '所选模型不受当前工具 schema 支持。使用 MCP 时可选择服务默认，避免生成请求被本地校验阻止；已启用的 Fish API 回退仍按原设置处理。',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: () => setDialogState(() => model = ''),
-                          icon: const Icon(Icons.clear),
-                          label: const Text('清空未受支持的模型设置'),
-                        ),
-                      ],
                       SwitchListTile(
                         value: autoFallback,
                         onChanged: (value) =>
                             setDialogState(() => autoFallback = value),
                         title: const Text('MCP 失败时允许回退现有 Fish API'),
                         subtitle: const Text(
-                          '默认关闭。开启后，仅在 MCP 尚未提交生成、且本地准备或参数校验失败时回退。使用现有 Fish API Key、模型和音色配置，可能消耗独立的开发者 API 余额；Plus 会员权益不代表开发者 API 余额。OAuth 凭据不会导出到普通备份。',
+                          '默认关闭。开启后，仅在 MCP 尚未提交生成、且本地准备失败时回退。使用现有 Fish API Key、模型和音色配置，可能消耗独立的开发者 API 余额；Plus 会员权益不代表开发者 API 余额。OAuth 凭据不会导出到普通备份。',
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -2401,7 +2410,7 @@ class SettingsScreenState extends State<SettingsScreen> {
                         Text(
                           service.drama3Supported
                               ? 'Drama 3：当前 TTS 工具的模型 schema 声明支持；实际权益与生成能力仍由服务端校验。'
-                              : 'Drama 3：当前 TTS 工具未明确声明支持。其他工具描述中出现名称不代表当前 TTS 可使用该模型。',
+                              : 'Drama 3：当前 schema 未列出该模型枚举，仍可选择并请求云端服务。',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       const SizedBox(height: 8),
@@ -2461,6 +2470,7 @@ class SettingsScreenState extends State<SettingsScreen> {
     controller.configureFishMcp(
       model: model,
       voice: voice.text,
+      asmrVoice: asmrVoice.text,
       autoFallback: autoFallback,
     );
   }

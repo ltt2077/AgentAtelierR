@@ -4386,7 +4386,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final apiKey = hasPrimary && widget.controller.ttsProvider.requiresApiKey
         ? await _secretStore.readTtsKey(widget.controller.ttsProvider)
         : '';
-    final fishApiKey = hasKlaudia
+    final fishApiKey =
+        hasKlaudia && widget.controller.ttsProvider != TtsProvider.fishAudioMcp
         ? widget.controller.ttsProvider == TtsProvider.fishAudio && hasPrimary
               ? apiKey
               : await _secretStore.readTtsKey(TtsProvider.fishAudio)
@@ -4417,9 +4418,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               ? !missingProviderSettings
               : apiKey.isNotEmpty && !missingProviderSettings);
     final klaudiaReady =
-        fishApiKey.isNotEmpty &&
-        widget.controller.fishAudioBaseUrl.trim().isNotEmpty &&
-        widget.controller.fishAudioModel.trim().isNotEmpty;
+        widget.controller.ttsProvider == TtsProvider.fishAudioMcp
+        ? _fishMcpService.isReady
+        : fishApiKey.isNotEmpty &&
+              widget.controller.fishAudioBaseUrl.trim().isNotEmpty &&
+              widget.controller.fishAudioModel.trim().isNotEmpty;
     final segments = candidateSegments
         .where((segment) => segment.isPrimary ? primaryReady : klaudiaReady)
         .toList(growable: false);
@@ -4735,9 +4738,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
       _stopSpeakingAnimation();
       if (!mounted) return;
-      final failedProvider = segments.any((segment) => segment.isPrimary)
-          ? widget.controller.ttsProvider
-          : TtsProvider.fishAudio;
+      final failedProvider = assistantSpeechTtsProvider(
+        segments.first,
+        primaryProvider: widget.controller.ttsProvider,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -4760,9 +4764,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }) async {
     // Request the provider-compatible format, then locally decode and balance
     // it into standard PCM16 WAV before playback and lip-sync analysis.
-    final provider = segment.isPrimary
-        ? widget.controller.ttsProvider
-        : TtsProvider.fishAudio;
+    final provider = assistantSpeechTtsProvider(
+      segment,
+      primaryProvider: widget.controller.ttsProvider,
+    );
     var actualProvider = provider;
     final playbackFormat = provider == TtsProvider.mimo
         ? 'wav'
@@ -4790,11 +4795,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       required TtsEmotionIntensity emotionIntensity,
     }) async {
       try {
+        final referenceId = fishReferenceIdForAssistantSpeech(
+          segment,
+          primaryReferenceId: widget.controller.fishMcpVoiceForMode(asmr: asmr),
+        );
         return await _fishMcpService.synthesize(
           text: text,
-          voice: widget.controller.fishMcpVoice.trim().isEmpty
-              ? null
-              : widget.controller.fishMcpVoice.trim(),
+          voice: referenceId.trim().isEmpty ? null : referenceId.trim(),
           model: widget.controller.fishMcpModel.trim().isEmpty
               ? null
               : widget.controller.fishMcpModel.trim(),
@@ -4816,8 +4823,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           rethrow;
         }
         final fallbackKey = await _secretStore.readFishAudioKey();
-        if (fallbackKey.isEmpty ||
-            widget.controller.activeFishAudioReferenceId.isEmpty) {
+        final fallbackReferenceId = fishReferenceIdForAssistantSpeech(
+          segment,
+          primaryReferenceId: widget.controller.activeFishAudioReferenceId,
+        );
+        if (fallbackKey.isEmpty || fallbackReferenceId.isEmpty) {
           rethrow;
         }
         RuntimeLog.instance.warning(
@@ -4827,7 +4837,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         actualProvider = TtsProvider.fishAudio;
         return _fishAudioClient.synthesize(
           apiKey: fallbackKey,
-          referenceId: widget.controller.activeFishAudioReferenceId,
+          referenceId: fallbackReferenceId,
           model: widget.controller.fishAudioModel,
           format: format,
           latency: widget.controller.fishAudioLatency,

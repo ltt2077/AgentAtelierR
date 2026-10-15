@@ -1015,6 +1015,14 @@ const _klaudiaCharacterIds = {
 
 const klaudiaFishAudioReferenceId = '7b7667d545f94326a7089830d2b55261';
 
+/// MCP also voices Klaudia without requiring an independent REST API key.
+TtsProvider assistantSpeechTtsProvider(
+  AssistantSpeechSegment segment, {
+  required TtsProvider primaryProvider,
+}) => segment.isPrimary || primaryProvider == TtsProvider.fishAudioMcp
+    ? primaryProvider
+    : TtsProvider.fishAudio;
+
 bool isKlaudiaSpeechSegment(
   ChatSegment segment, {
   required String activeCharacterId,

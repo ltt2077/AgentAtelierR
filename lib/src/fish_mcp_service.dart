@@ -128,7 +128,8 @@ class FishMcpService extends ChangeNotifier {
       'state': state.name,
       'tts_tool': ttsToolName,
       'discovered_at': lastDiscoveryAt?.toIso8601String(),
-      'drama3_schema_support': drama3Supported,
+      'drama3_listed_in_schema': drama3Supported,
+      'local_input_schema_validation': false,
       'tools': tools.map((tool) => tool.toJson()).toList(),
       'last_request': _lastRequestSummary,
       'last_result': _lastResultSummary,
@@ -339,7 +340,7 @@ class FishMcpService extends ChangeNotifier {
       ttsToolName = selected?.name;
       drama3Supported = _detectDrama3ForSelectedTool();
       lastDiscoveryAt = DateTime.now();
-      errorMessage = ttsToolName == null ? '工具列表中没有具有文本输入的 TTS 生成工具。' : null;
+      errorMessage = ttsToolName == null ? '工具列表中没有可识别的 TTS 生成工具。' : null;
       lastError = null;
       _setState(FishMcpConnectionState.toolsDiscovered);
       RuntimeLog.instance.info(

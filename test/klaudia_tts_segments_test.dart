@@ -4,6 +4,45 @@ import 'package:ryza_chat_mvp/src/chat_segments.dart';
 import 'package:ryza_chat_mvp/src/character_performance.dart';
 
 void main() {
+  test('MCP voices primary and Klaudia with one provider and distinct IDs', () {
+    final speech = assistantSpeechSegmentsForResponse(
+      '莱莎：今天好吗？\n角色[klaudia]：很好。',
+      activeCharacterId: 'ryza',
+      fallbackMood: CharacterMood.neutral,
+    );
+    expect(speech, hasLength(2));
+    for (final segment in speech) {
+      expect(
+        assistantSpeechTtsProvider(
+          segment,
+          primaryProvider: TtsProvider.fishAudioMcp,
+        ),
+        TtsProvider.fishAudioMcp,
+      );
+    }
+    expect(
+      fishReferenceIdForAssistantSpeech(
+        speech.first,
+        primaryReferenceId: 'normal-or-asmr',
+      ),
+      'normal-or-asmr',
+    );
+    expect(
+      fishReferenceIdForAssistantSpeech(
+        speech.last,
+        primaryReferenceId: 'normal-or-asmr',
+      ),
+      klaudiaFishAudioReferenceId,
+    );
+    expect(
+      assistantSpeechTtsProvider(
+        speech.last,
+        primaryProvider: TtsProvider.local,
+      ),
+      TtsProvider.fishAudio,
+    );
+  });
+
   test('Klaudia speech follows Ryza dialogue without voicing narration or translation', () {
     const response = '''旁白：两人走进工房。
 莱莎：[happy]先看看新材料吧。

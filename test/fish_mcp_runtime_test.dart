@@ -351,18 +351,111 @@ void main() {
   );
 
   test(
-    'schema rejects unsupported model before any generation request',
+    'configured model reaches generation when absent from discovery schema',
     () async {
       final harness = await _Harness.create();
       await harness.service.discoverTools();
-      final error = await _failure(
-        harness.service.synthesize(text: '非公開の台詞', model: 'drama-3'),
+      final path = await harness.service.synthesize(
+        text: '非公開の台詞',
+        model: 'drama-3',
+        voice: 'configured-voice',
       );
-      expect(error.code, 'unsupported_model_parameter');
-      expect(error.generationSubmitted, isFalse);
-      expect(error.allowsRestFallback, isTrue);
-      expect(harness.client.requests, isEmpty);
+      expect(path, endsWith('.mp3'));
+      expect(harness.client.requests.single.arguments, {
+        'text': '非公開の台詞',
+        'model': 'drama-3',
+        'voice_id': 'configured-voice',
+      });
+      expect(harness.service.lastError, isNull);
       expect(harness.downloads, isEmpty);
+    },
+  );
+
+  for (final alias in ['model', 'model_id', 'modelId']) {
+    test(
+      'configured model bypasses stale $alias enum and reaches cloud',
+      () async {
+        final harness = await _Harness.create(
+          client: _FakeMcpClient(
+            pages: {
+              null: ListToolsResult(
+                tools: [
+                  _tool(
+                    properties: {
+                      alias: {
+                        'type': 'string',
+                        'enum': ['old-server-model'],
+                      },
+                    },
+                  ),
+                ],
+              ),
+            },
+          ),
+        );
+        await harness.service.discoverTools();
+        expect(
+          await harness.service.synthesize(text: 'local', model: 'drama-3'),
+          endsWith('.mp3'),
+        );
+        expect(harness.client.requests.single.arguments, {
+          'text': 'local',
+          alias: 'drama-3',
+        });
+        expect(harness.downloads, isEmpty);
+      },
+    );
+  }
+
+  test(
+    'incomplete text schema uses canonical text and preserves cloud rejection',
+    () async {
+      final harness = await _Harness.create(
+        client: _FakeMcpClient(
+          pages: {
+            null: ListToolsResult(
+              tools: [
+                Tool(
+                  name: 'text_to_speech',
+                  inputSchema: JsonSchema.fromJson({
+                    'type': 'object',
+                    'properties': {
+                      'content_new': {'type': 'string'},
+                    },
+                    'required': ['content_new', 'new_remote_field'],
+                    'additionalProperties': false,
+                  }),
+                ),
+              ],
+            ),
+          },
+          onCall: (_) => const CallToolResult(
+            content: [],
+            isError: true,
+            structuredContent: {
+              'error': {
+                'code': 'cloud_invalid_input',
+                'message': 'Cloud rejected the request',
+              },
+              'request_id': 'req-cloud-validation',
+            },
+          ),
+        ),
+      );
+      await harness.service.discoverTools();
+      expect(harness.service.isReady, isTrue);
+      final error = await _failure(
+        harness.service.synthesize(text: 'local', model: 'drama-3'),
+      );
+      expect(harness.client.requests.single.arguments, {
+        'text': 'local',
+        'model': 'drama-3',
+      });
+      expect(error.code, 'cloud_invalid_input');
+      expect(error.message, 'Cloud rejected the request');
+      expect(error.requestId, 'req-cloud-validation');
+      expect(error.generationSubmitted, isTrue);
+      expect(error.allowsRestFallback, isFalse);
     },
   );
 

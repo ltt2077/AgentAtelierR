@@ -1058,6 +1058,7 @@ class AppController extends ChangeNotifier {
   double fishAudioSpeed = 1.0;
   String fishMcpModel = '';
   String fishMcpVoice = '';
+  String fishMcpAsmrVoice = '';
   bool fishMcpAutoFallback = false;
   String dashScopeTtsBaseUrl =
       'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
@@ -1350,6 +1351,7 @@ class AppController extends ChangeNotifier {
     fishAudioSpeed = _preferences.getDouble('fish_audio_speed') ?? 1.0;
     fishMcpModel = _preferences.getString('fish_mcp_model') ?? '';
     fishMcpVoice = _preferences.getString('fish_mcp_voice') ?? '';
+    fishMcpAsmrVoice = _preferences.getString('fish_mcp_asmr_voice') ?? '';
     fishMcpAutoFallback =
         _preferences.getBool('fish_mcp_auto_fallback') ?? false;
     dashScopeTtsBaseUrl =
@@ -3719,10 +3721,12 @@ $japanesePunctuationRule
   void configureFishMcp({
     required String model,
     required String voice,
+    String? asmrVoice,
     required bool autoFallback,
   }) {
     fishMcpModel = model.trim();
     fishMcpVoice = voice.trim();
+    if (asmrVoice != null) fishMcpAsmrVoice = asmrVoice.trim();
     fishMcpAutoFallback = autoFallback;
     ttsProvider = TtsProvider.fishAudioMcp;
     fishTtsEnabled = true;
@@ -3785,6 +3789,14 @@ $japanesePunctuationRule
     TtsVoiceMode.normal => fishAudioReferenceId,
     TtsVoiceMode.asmr => fishAudioAsmrReferenceId,
   };
+
+  String get activeFishMcpVoice =>
+      fishMcpVoiceForMode(asmr: ttsVoiceMode == TtsVoiceMode.asmr);
+
+  String fishMcpVoiceForMode({required bool asmr}) =>
+      asmr && fishMcpAsmrVoice.trim().isNotEmpty
+      ? fishMcpAsmrVoice.trim()
+      : fishMcpVoice.trim();
 
   String get activeDashScopeTtsVoice => ttsVoiceMode == TtsVoiceMode.asmr
       ? dashScopeTtsAsmrVoice
@@ -3964,6 +3976,7 @@ $japanesePunctuationRule
       'fishAudioSpeed': fishAudioSpeed,
       'fishMcpModel': fishMcpModel,
       'fishMcpVoice': fishMcpVoice,
+      'fishMcpAsmrVoice': fishMcpAsmrVoice,
       'fishMcpAutoFallback': fishMcpAutoFallback,
       'dashScopeTtsBaseUrl': dashScopeTtsBaseUrl,
       'dashScopeTtsModel': dashScopeTtsModel,
@@ -4824,6 +4837,8 @@ $japanesePunctuationRule
     fishAudioSpeed = (preferences['fishAudioSpeed'] as num?)?.toDouble() ?? 1.0;
     fishMcpModel = preferences['fishMcpModel'] as String? ?? fishMcpModel;
     fishMcpVoice = preferences['fishMcpVoice'] as String? ?? fishMcpVoice;
+    fishMcpAsmrVoice =
+        preferences['fishMcpAsmrVoice'] as String? ?? fishMcpAsmrVoice;
     fishMcpAutoFallback =
         preferences['fishMcpAutoFallback'] as bool? ?? fishMcpAutoFallback;
     dashScopeTtsBaseUrl =
@@ -6174,6 +6189,7 @@ $japanesePunctuationRule
       _preferences.setDouble('fish_audio_speed', fishAudioSpeed),
       _preferences.setString('fish_mcp_model', fishMcpModel),
       _preferences.setString('fish_mcp_voice', fishMcpVoice),
+      _preferences.setString('fish_mcp_asmr_voice', fishMcpAsmrVoice),
       _preferences.setBool('fish_mcp_auto_fallback', fishMcpAutoFallback),
       _preferences.setString('dashscope_tts_base_url', dashScopeTtsBaseUrl),
       _preferences.setString('dashscope_tts_model', dashScopeTtsModel),

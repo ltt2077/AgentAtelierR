@@ -238,6 +238,20 @@ try {
     $encodedTag = [System.Uri]::EscapeDataString($Tag)
     $tagResult = Send-GitHubJson GET "/repos/$Repository/git/ref/tags/$encodedTag" -AllowedStatus @(200, 404)
     $releaseResult = Send-GitHubJson GET "/repos/$Repository/releases/tags/$encodedTag" -AllowedStatus @(200, 404)
+    # Draft releases are not always returned by the tag endpoint. Recover a
+    # previous interrupted upload before attempting to create another release.
+    if ($releaseResult.Status -eq 404) {
+        for ($page = 1; $page -le 100; $page++) {
+            $releasePage = Send-GitHubJson GET "/repos/$Repository/releases?per_page=100&page=$page"
+            $batch = @($releasePage.Data)
+            $draftMatch = $batch | Where-Object { $_['tag_name'] -eq $Tag } | Select-Object -First 1
+            if ($null -ne $draftMatch) {
+                $releaseResult = [pscustomobject]@{ Status = 200; Data = $draftMatch }
+                break
+            }
+            if ($batch.Count -lt 100) { break }
+        }
+    }
 
     Write-Host "GitHub API authentication: available; repository push permission: $canPush"
     Write-Host "Remote tag $Tag`: $(if ($tagResult.Status -eq 200) { 'present' } else { 'missing' })"
@@ -278,6 +292,10 @@ try {
         $releaseId = [long]$release['id']
         $assets = @(Get-ReleaseAssets $releaseId)
         $existing = $assets | Where-Object { $_['name'] -eq $AssetName } | Select-Object -First 1
+        if ($null -ne $existing -and $existing['state'] -ne 'uploaded') {
+            Send-GitHubJson DELETE "/repos/$Repository/releases/assets/$($existing['id'])" -AllowedStatus @(204) | Out-Null
+            $existing = $null
+        }
         if ($null -ne $existing -and $existing['digest'] -eq "sha256:$sha256") {
             Write-Host 'The release APK already matches the local SHA-256; upload skipped.'
         }
@@ -309,6 +327,10 @@ try {
         if ($null -ne $additional) {
             $additionalSha256 = (Get-FileHash -LiteralPath $additional.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             $additionalExisting = $assets | Where-Object { $_['name'] -eq $AdditionalAssetName } | Select-Object -First 1
+            if ($null -ne $additionalExisting -and $additionalExisting['state'] -ne 'uploaded') {
+                Send-GitHubJson DELETE "/repos/$Repository/releases/assets/$($additionalExisting['id'])" -AllowedStatus @(204) | Out-Null
+                $additionalExisting = $null
+            }
             if ($null -ne $additionalExisting -and $additionalExisting['digest'] -eq "sha256:$additionalSha256") {
                 Write-Host "The additional release asset already matches the local SHA-256; upload skipped."
             }

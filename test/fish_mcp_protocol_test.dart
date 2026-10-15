@@ -177,7 +177,7 @@ void main() {
     });
   });
 
-  group('tool identification and real schema validation', () {
+  group('tool identification and cloud-validated parameter mapping', () {
     test('canonical text_to_speech wins without relying on descriptions', () {
       final expected = tool();
       expect(
@@ -211,84 +211,90 @@ void main() {
             name: 'unrelated',
             description: 'TTS text-to-speech speech synthesis',
           ),
-          tool(
-            schema: {
-              'type': 'object',
-              'properties': {
-                'voice_id': {'type': 'string'},
-              },
-            },
-          ),
         ]),
         isNull,
       );
     });
 
-    test('only known declared fields are emitted', () {
+    test('a generation tool with incomplete text schema stays selectable', () {
       final definition = tool(
         schema: {
           'type': 'object',
           'properties': {
-            'input_text': {'type': 'string'},
             'voice_id': {'type': 'string'},
-            'model_id': {
-              'type': 'string',
-              'enum': ['allowed-model'],
-            },
-            'lang': {'type': 'string'},
-            'output_format': {
-              'type': 'string',
-              'enum': ['mp3'],
-            },
-            'prosody_speed': {'type': 'number', 'minimum': 0.5, 'maximum': 2},
           },
-          'required': ['input_text', 'voice_id'],
-          'additionalProperties': false,
         },
       );
-      expect(
-        buildFishMcpTtsArguments(
-          tool: definition,
-          text: 'こんにちは',
-          voice: 'voice-test',
-          model: 'allowed-model',
-          language: 'ja',
-          format: 'mp3',
-          speed: 1.1,
-        ),
-        {
-          'input_text': 'こんにちは',
-          'voice_id': 'voice-test',
-          'model_id': 'allowed-model',
-          'lang': 'ja',
-          'output_format': 'mp3',
-          'prosody_speed': 1.1,
-        },
-      );
-      expect(
-        buildFishMcpTtsArguments(
-          tool: tool(),
-          text: 'Hello',
-          voice: 'unused-voice',
-          language: 'ja',
-          format: 'wav',
-          speed: 1,
-        ),
-        {'text': 'Hello'},
-      );
+      expect(selectFishMcpTtsTool([definition]), same(definition));
+      expect(buildFishMcpTtsArguments(tool: definition, text: 'Hello'), {
+        'text': 'Hello',
+      });
     });
 
-    test('an unsupported configured model is rejected before a paid call', () {
+    test(
+      'declared aliases map and configured voice has a canonical fallback',
+      () {
+        final definition = tool(
+          schema: {
+            'type': 'object',
+            'properties': {
+              'input_text': {'type': 'string'},
+              'voice_id': {'type': 'string'},
+              'model_id': {
+                'type': 'string',
+                'enum': ['allowed-model'],
+              },
+              'lang': {'type': 'string'},
+              'output_format': {
+                'type': 'string',
+                'enum': ['mp3'],
+              },
+              'prosody_speed': {'type': 'number', 'minimum': 0.5, 'maximum': 2},
+            },
+            'required': ['input_text', 'voice_id'],
+            'additionalProperties': false,
+          },
+        );
+        expect(
+          buildFishMcpTtsArguments(
+            tool: definition,
+            text: 'こんにちは',
+            voice: 'voice-test',
+            model: 'allowed-model',
+            language: 'ja',
+            format: 'mp3',
+            speed: 1.1,
+          ),
+          {
+            'input_text': 'こんにちは',
+            'voice_id': 'voice-test',
+            'model_id': 'allowed-model',
+            'lang': 'ja',
+            'output_format': 'mp3',
+            'prosody_speed': 1.1,
+          },
+        );
+        expect(
+          buildFishMcpTtsArguments(
+            tool: tool(),
+            text: 'Hello',
+            voice: 'unused-voice',
+            language: 'ja',
+            format: 'wav',
+            speed: 1,
+          ),
+          {'text': 'Hello', 'voice_id': 'unused-voice'},
+        );
+      },
+    );
+
+    test('a configured model passes through an absent or stale schema', () {
       expect(
-        () => buildFishMcpTtsArguments(
-          tool: tool(),
-          text: 'Hello',
-          model: 'drama-3',
-        ),
-        throwsA(failureWith('unsupported_model_parameter')),
+        buildFishMcpTtsArguments(tool: tool(), text: 'Hello', model: 'drama-3'),
+        {'text': 'Hello', 'model': 'drama-3'},
       );
       expect(
-        () => buildFishMcpTtsArguments(
+        buildFishMcpTtsArguments(
           tool: tool(
             schema: textSchema(
               extra: {
@@ -302,42 +308,58 @@ void main() {
           text: 'Hello',
           model: 'drama-3',
         ),
-        throwsA(failureWith('invalid_tool_arguments')),
+        {'text': 'Hello', 'model': 'drama-3'},
       );
     });
 
-    test(
-      'SDK catches unknown required fields, length and numeric constraints',
-      () {
-        final requiredUnknown = textSchema()
-          ..['required'] = ['text', 'billing_mode'];
+    for (final alias in ['model', 'model_id', 'modelId']) {
+      test('model uses declared $alias without enum rejection', () {
         expect(
-          () => buildFishMcpTtsArguments(
-            tool: tool(schema: requiredUnknown),
-            text: 'Hi',
-          ),
-          throwsA(failureWith('invalid_tool_arguments')),
-        );
-        expect(
-          () => buildFishMcpTtsArguments(tool: tool(), text: ''),
-          throwsA(failureWith('invalid_tool_arguments')),
-        );
-        expect(
-          () => buildFishMcpTtsArguments(
+          buildFishMcpTtsArguments(
             tool: tool(
               schema: textSchema(
                 extra: {
-                  'speed': {'type': 'number', 'minimum': 0.8, 'maximum': 1.2},
+                  alias: {
+                    'type': 'string',
+                    'enum': ['old-model'],
+                  },
                 },
               ),
             ),
             text: 'Hello',
-            speed: 1.5,
+            model: 'drama-3',
           ),
-          throwsA(failureWith('invalid_tool_arguments')),
+          {'text': 'Hello', alias: 'drama-3'},
         );
-      },
-    );
+      });
+    }
+
+    test('cached required fields, length and numeric constraints do not reject locally', () {
+      final requiredUnknown = textSchema()
+        ..['required'] = ['text', 'billing_mode'];
+      expect(
+        buildFishMcpTtsArguments(
+          tool: tool(schema: requiredUnknown),
+          text: 'Hi',
+        ),
+        {'text': 'Hi'},
+      );
+      expect(buildFishMcpTtsArguments(tool: tool(), text: ''), {'text': ''});
+      expect(
+        buildFishMcpTtsArguments(
+          tool: tool(
+            schema: textSchema(
+              extra: {
+                'speed': {'type': 'number', 'minimum': 0.8, 'maximum': 1.2},
+              },
+            ),
+          ),
+          text: 'Hello',
+          speed: 1.5,
+        ),
+        {'text': 'Hello', 'speed': 1.5},
+      );
+    });
 
     for (final expected in ['ja', 'ja-JP', 'Japanese']) {
       test('Japanese aliases map to the real $expected enum', () {
@@ -385,80 +407,78 @@ void main() {
       },
     );
 
-    test(
-      'required unsupported language fails rather than silently changing it',
-      () {
-        final schema = textSchema(
-          extra: {
-            'language': {
-              'type': 'string',
-              'enum': ['English'],
-            },
-          },
-        )..['required'] = ['text', 'language'];
-        expect(
-          () => buildFishMcpTtsArguments(
-            tool: tool(schema: schema),
-            text: 'こんにちは',
-            language: 'ja',
-          ),
-          throwsA(failureWith('invalid_tool_arguments')),
-        );
-      },
-    );
-
-    test('local schema references and allOf remain enforceable', () {
-      final definition = tool(
-        schema: {
-          'type': 'object',
-          r'$ref': r'#/$defs/input',
-          r'$defs': {
-            'input': {
-              'allOf': [
-                {
-                  'properties': {
-                    'text': {'type': 'string', 'minLength': 2},
-                  },
-                  'required': ['text'],
-                },
-                {
-                  'properties': {
-                    'language': {
-                      'type': 'string',
-                      'enum': ['Japanese'],
-                    },
-                  },
-                },
-              ],
-            },
+    test('required unmatched language passes through for cloud validation', () {
+      final schema = textSchema(
+        extra: {
+          'language': {
+            'type': 'string',
+            'enum': ['English'],
           },
         },
-      );
+      )..['required'] = ['text', 'language'];
       expect(
         buildFishMcpTtsArguments(
-          tool: definition,
+          tool: tool(schema: schema),
           text: 'こんにちは',
           language: 'ja',
         ),
-        {'text': 'こんにちは', 'language': 'Japanese'},
-      );
-      expect(
-        () => buildFishMcpTtsArguments(tool: definition, text: 'x'),
-        throwsA(failureWith('invalid_tool_arguments')),
+        {'text': 'こんにちは', 'language': 'ja'},
       );
     });
 
-    test('unresolved external schema references fail locally', () {
+    test(
+      'local schema references and allOf still provide parameter aliases',
+      () {
+        final definition = tool(
+          schema: {
+            'type': 'object',
+            r'$ref': r'#/$defs/input',
+            r'$defs': {
+              'input': {
+                'allOf': [
+                  {
+                    'properties': {
+                      'text': {'type': 'string', 'minLength': 2},
+                    },
+                    'required': ['text'],
+                  },
+                  {
+                    'properties': {
+                      'language': {
+                        'type': 'string',
+                        'enum': ['Japanese'],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        );
+        expect(
+          buildFishMcpTtsArguments(
+            tool: definition,
+            text: 'こんにちは',
+            language: 'ja',
+          ),
+          {'text': 'こんにちは', 'language': 'Japanese'},
+        );
+        expect(buildFishMcpTtsArguments(tool: definition, text: 'x'), {
+          'text': 'x',
+        });
+      },
+    );
+
+    test('unresolved external schema references do not reject generation', () {
       final definition = tool(
         schema: {
           ...textSchema(),
           r'$ref': 'https://schema.example.invalid/input.json',
         },
       );
-      expect(
-        () => buildFishMcpTtsArguments(tool: definition, text: 'Hello'),
-        throwsA(failureWith('invalid_tool_arguments')),
-      );
+      expect(buildFishMcpTtsArguments(tool: definition, text: 'Hello'), {
+        'text': 'Hello',
+      });
     });
   });
 

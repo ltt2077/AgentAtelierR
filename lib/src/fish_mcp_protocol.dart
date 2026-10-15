@@ -292,7 +292,7 @@ class FishMcpToolDefinition {
 
 const _textFields = ['text', 'input_text', 'content'];
 
-/// Selects a generation tool by its explicit name and text contract.
+/// Selects a generation tool by its explicit name.
 ///
 /// A description that merely mentions TTS, or a voice/credit search tool, is
 /// insufficient. The ordering is deterministic when the service offers several
@@ -347,8 +347,6 @@ FishMcpToolDefinition? selectFishMcpTtsTool(
       }
     }
     if (score == 0) continue;
-    final properties = _schemaProperties(tool.inputSchema);
-    if (!_textFields.any(properties.containsKey)) continue;
     scored.add((tool: tool, score: score));
   }
   scored.sort((a, b) {
@@ -358,8 +356,8 @@ FishMcpToolDefinition? selectFishMcpTtsTool(
   return scored.isEmpty ? null : scored.first.tool;
 }
 
-/// Maps only declared fields, then validates the entire real input schema.
-/// Required fields not understood by this adapter must fail before tools/call.
+/// Maps declared field aliases without rejecting requests against cached schema.
+/// The cloud service validates models and other generation parameters.
 Map<String, dynamic> buildFishMcpTtsArguments({
   required FishMcpToolDefinition tool,
   required String text,
@@ -381,26 +379,30 @@ Map<String, dynamic> buildFishMcpTtsArguments({
     }
   }
 
-  if (!_textFields.any(properties.containsKey)) {
-    throw FishMcpException(
-      stage: 'input_schema',
-      code: 'missing_text_parameter',
-      message: '工具 ${tool.name} 的 inputSchema 没有可识别的文本参数，未发送生成请求。',
-    );
+  final textField =
+      _textFields.where(properties.containsKey).firstOrNull ?? 'text';
+  arguments[textField] = text;
+  if (voice != null && voice.trim().isNotEmpty) {
+    final voiceField =
+        const [
+          'voice',
+          'voice_id',
+          'speaker',
+          'reference_id',
+        ].where(properties.containsKey).firstOrNull ??
+        'voice_id';
+    arguments[voiceField] = voice;
   }
-  put(_textFields, text);
-  if (model != null &&
-      model.trim().isNotEmpty &&
-      !const ['model', 'model_id', 'modelId'].any(properties.containsKey)) {
-    throw FishMcpException(
-      stage: 'input_schema',
-      code: 'unsupported_model_parameter',
-      message:
-          '工具 ${tool.name} 的真实 inputSchema 不支持模型选择；请清空模型设置后使用服务默认模型。未发送生成请求。',
-    );
+  if (model != null && model.trim().isNotEmpty) {
+    final modelField =
+        const [
+          'model',
+          'model_id',
+          'modelId',
+        ].where(properties.containsKey).firstOrNull ??
+        'model';
+    arguments[modelField] = model;
   }
-  put(const ['voice', 'voice_id', 'speaker', 'reference_id'], voice);
-  put(const ['model', 'model_id', 'modelId'], model);
   final languageField = const [
     'language',
     'lang',
@@ -422,7 +424,7 @@ Map<String, dynamic> buildFishMcpTtsArguments({
           '语言参数与工具枚举不匹配，已省略可选参数并使用服务默认语言。',
         );
       } else {
-        // A required unsupported language must fail SDK validation locally.
+        // Preserve an unmatched required language for cloud-side validation.
         languageValue ??= language;
       }
     }
@@ -430,18 +432,6 @@ Map<String, dynamic> buildFishMcpTtsArguments({
   put(const ['language', 'lang'], languageValue);
   put(const ['format', 'output_format'], format);
   put(const ['speed', 'prosody_speed'], speed);
-  try {
-    JsonSchema.fromJson(tool.inputSchema).validate(arguments);
-  } on Object catch (cause) {
-    final detail = cause is JsonSchemaValidationException
-        ? '${cause.message} (at ${cause.path.join('/')})'
-        : cause.toString();
-    throw FishMcpException(
-      stage: 'input_schema',
-      code: 'invalid_tool_arguments',
-      message: '工具 ${tool.name} 参数不符合真实 inputSchema，未发送生成请求：$detail',
-    );
-  }
   return Map.unmodifiable(arguments);
 }
 
