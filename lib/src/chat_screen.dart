@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:spine_flutter/spine_flutter.dart' hide Color;
 
 import 'ai_services.dart';
+import 'fish_mcp_service.dart';
 import 'continuous_asmr_page.dart';
 import 'auxiliary_llm_tasks.dart';
 import 'performance_planner.dart';
@@ -284,6 +285,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     agentToolExecutor: const DeviceAgentTools().execute,
   );
   final _fishAudioClient = FishAudioClient();
+  final _fishMcpService = FishMcpService.instance;
   final _dashScopeTtsClient = DashScopeTtsClient();
   final _genericTtsClient = GenericTtsClient();
   final _mimoTtsClient = MimoTtsClient();
@@ -4218,8 +4220,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final asmr = widget.controller.asmrModeEnabled;
     final previousEmotion = _previousSpeechEmotion;
     try {
-      if ((await _secretStore.readTtsKey(widget.controller.ttsProvider))
-          .isEmpty) {
+      if (widget.controller.ttsProvider.requiresApiKey &&
+          (await _secretStore.readTtsKey(widget.controller.ttsProvider))
+              .isEmpty) {
         return null;
       }
       RuntimeLog.instance.info('SpeechPlanner', '独立语音演出规划开始');
@@ -4258,8 +4261,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }) async {
     if (!_isStrongSingingRequest(userInput)) return null;
     try {
-      if ((await _secretStore.readTtsKey(widget.controller.ttsProvider))
-          .isEmpty) {
+      if (widget.controller.ttsProvider.requiresApiKey &&
+          (await _secretStore.readTtsKey(widget.controller.ttsProvider))
+              .isEmpty) {
         return null;
       }
       RuntimeLog.instance.info('SingingPlanner', '明确歌唱请求，独立歌唱标签规划开始');
@@ -4389,6 +4393,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final missingProviderSettings = switch (widget.controller.ttsProvider) {
       TtsProvider.fishAudio =>
         widget.controller.activeFishAudioReferenceId.isEmpty,
+      TtsProvider.fishAudioMcp => !_fishMcpService.isReady,
       TtsProvider.dashScope =>
         widget.controller.dashScopeTtsBaseUrl.isEmpty ||
             widget.controller.activeDashScopeTtsVoice.isEmpty,
@@ -4407,7 +4412,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 .speechText,
             widget.controller.characterReplyLanguage,
           )
-        : apiKey.isNotEmpty && !missingProviderSettings;
+        : (widget.controller.ttsProvider == TtsProvider.fishAudioMcp
+              ? !missingProviderSettings
+              : apiKey.isNotEmpty && !missingProviderSettings);
     final klaudiaReady =
         fishApiKey.isNotEmpty &&
         widget.controller.fishAudioBaseUrl.trim().isNotEmpty &&
@@ -4512,6 +4519,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       final model = switch (widget.controller.ttsProvider) {
         TtsProvider.fishAudio => widget.controller.fishAudioModel,
+        TtsProvider.fishAudioMcp =>
+          widget.controller.fishMcpModel.isEmpty
+              ? 'MCP tools/list tool'
+              : widget.controller.fishMcpModel,
         TtsProvider.dashScope => widget.controller.dashScopeTtsModel,
         TtsProvider.generic => widget.controller.genericTtsModel,
         TtsProvider.mimo => widget.controller.mimoTts.model,
@@ -4764,6 +4775,49 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         'Express $plannedEmotion naturally; preserve continuity with the preceding sentence.',
       if (asmr) 'Speak softly in a close, quiet voice.',
     ].join(' ');
+    Future<String> synthesizeFishMcpWithFallback({
+      required String text,
+      required String format,
+      required double speed,
+      required TtsEmotionIntensity emotionIntensity,
+    }) async {
+      try {
+        return await _fishMcpService.synthesize(
+          text: text,
+          voice: widget.controller.fishMcpVoice.trim().isEmpty
+              ? null
+              : widget.controller.fishMcpVoice.trim(),
+          model: widget.controller.fishMcpModel.trim().isEmpty
+              ? null
+              : widget.controller.fishMcpModel.trim(),
+          format: format,
+          speed: speed,
+        );
+      } on Object catch (error) {
+        if (!widget.controller.fishMcpAutoFallback) rethrow;
+        final fallbackKey = await _secretStore.readFishAudioKey();
+        if (fallbackKey.isEmpty ||
+            widget.controller.activeFishAudioReferenceId.isEmpty) {
+          rethrow;
+        }
+        RuntimeLog.instance.warning(
+          'TTS',
+          'Fish MCP 失败，回退 Fish Audio REST：${error.runtimeType}',
+        );
+        return _fishAudioClient.synthesize(
+          apiKey: fallbackKey,
+          referenceId: widget.controller.activeFishAudioReferenceId,
+          model: widget.controller.fishAudioModel,
+          format: format,
+          latency: widget.controller.fishAudioLatency,
+          speed: speed,
+          baseUrl: widget.controller.fishAudioBaseUrl,
+          temperature: emotionIntensity.fishTemperature,
+          text: text,
+        );
+      }
+    }
+
     Future<String> synthesizeOnce() => switch (provider) {
       TtsProvider.fishAudio => _fishAudioClient.synthesize(
         apiKey: apiKey,
@@ -4785,6 +4839,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 asmr: asmr,
               )
             : plainText,
+      ),
+      TtsProvider.fishAudioMcp => synthesizeFishMcpWithFallback(
+        text: segment.isPrimary
+            ? applyFishEmotionIntensityPerSentence(
+                ttsText,
+                emotionIntensity,
+                density: widget.controller.ttsCueDensity,
+                asmr: asmr,
+              )
+            : plainText,
+        format: playbackFormat,
+        speed: widget.controller.fishAudioSpeed,
+        emotionIntensity: emotionIntensity,
       ),
       TtsProvider.dashScope => _dashScopeTtsClient.synthesize(
         apiKey: apiKey,
@@ -4835,6 +4902,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         voiceProfileId: widget.controller.localTtsVoiceProfileId,
       ),
     };
+
     const maxAttempts = 2;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       var path = await synthesizeOnce();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:app_links/app_links.dart';
 import 'package:alarm/alarm.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import 'src/character_appearance.dart';
 import 'src/character_runtime_profile.dart';
 import 'src/ryza_loading_indicator.dart';
 import 'src/glass_ui.dart';
+import 'src/fish_mcp_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +66,7 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   AppController? _controller;
   Object? _error;
   Timer? _logoTimer;
+  StreamSubscription<Uri>? _appLinksSubscription;
   bool _showLogo = true;
   bool _characterReady = false;
 
@@ -73,12 +76,19 @@ class _BootstrapAppState extends State<_BootstrapApp> {
     _logoTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _showLogo = false);
     });
+    _appLinksSubscription = AppLinks().uriLinkStream.listen(
+      (uri) => unawaited(FishMcpService.instance.handleRedirectUri(uri)),
+      onError: (Object error, StackTrace stack) {
+        RuntimeLog.instance.warning('Fish MCP', 'OAuth 回调监听失败：$error');
+      },
+    );
     _initialize();
   }
 
   @override
   void dispose() {
     _logoTimer?.cancel();
+    _appLinksSubscription?.cancel();
     _controller?.removeListener(_handleControllerChanged);
     super.dispose();
   }

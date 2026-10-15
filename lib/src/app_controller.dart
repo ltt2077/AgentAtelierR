@@ -60,7 +60,7 @@ extension LlmProviderLabel on LlmProvider {
   };
 }
 
-enum TtsProvider { fishAudio, dashScope, generic, mimo, local }
+enum TtsProvider { fishAudio, fishAudioMcp, dashScope, generic, mimo, local }
 
 enum TtsVoiceMode { normal, asmr }
 
@@ -151,13 +151,15 @@ extension TtsEmotionIntensityLabel on TtsEmotionIntensity {
 extension TtsProviderLabel on TtsProvider {
   String get label => switch (this) {
     TtsProvider.fishAudio => 'Fish Audio',
+    TtsProvider.fishAudioMcp => 'Fish Audio MCP（OAuth）',
     TtsProvider.dashScope => '百炼 Qwen-TTS',
     TtsProvider.generic => '通用 OpenAI TTS',
     TtsProvider.mimo => 'MiMo TTS',
     TtsProvider.local => 'CosyVoice 3（本地）',
   };
 
-  bool get requiresApiKey => this != TtsProvider.local;
+  bool get requiresApiKey =>
+      this != TtsProvider.local && this != TtsProvider.fishAudioMcp;
 }
 
 enum UserRelationshipRole {
@@ -1054,6 +1056,9 @@ class AppController extends ChangeNotifier {
   String fishAudioFormat = 'mp3';
   String fishAudioLatency = 'normal';
   double fishAudioSpeed = 1.0;
+  String fishMcpModel = '';
+  String fishMcpVoice = '';
+  bool fishMcpAutoFallback = true;
   String dashScopeTtsBaseUrl =
       'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
   String dashScopeTtsModel = 'qwen3-tts-flash';
@@ -1343,6 +1348,10 @@ class AppController extends ChangeNotifier {
     fishAudioFormat = _preferences.getString('fish_audio_format') ?? 'mp3';
     fishAudioLatency = _preferences.getString('fish_audio_latency') ?? 'normal';
     fishAudioSpeed = _preferences.getDouble('fish_audio_speed') ?? 1.0;
+    fishMcpModel = _preferences.getString('fish_mcp_model') ?? '';
+    fishMcpVoice = _preferences.getString('fish_mcp_voice') ?? '';
+    fishMcpAutoFallback =
+        _preferences.getBool('fish_mcp_auto_fallback') ?? true;
     dashScopeTtsBaseUrl =
         _preferences.getString('dashscope_tts_base_url') ?? dashScopeTtsBaseUrl;
     dashScopeTtsModel =
@@ -3707,6 +3716,19 @@ $japanesePunctuationRule
     _changed();
   }
 
+  void configureFishMcp({
+    required String model,
+    required String voice,
+    required bool autoFallback,
+  }) {
+    fishMcpModel = model.trim();
+    fishMcpVoice = voice.trim();
+    fishMcpAutoFallback = autoFallback;
+    ttsProvider = TtsProvider.fishAudioMcp;
+    fishTtsEnabled = true;
+    _changed();
+  }
+
   void configureLocalTts({required bool enabled}) {
     fishTtsEnabled = enabled;
     ttsProvider = TtsProvider.local;
@@ -3740,6 +3762,7 @@ $japanesePunctuationRule
 
   bool get hasAsmrVoiceForCurrentProvider => switch (ttsProvider) {
     TtsProvider.fishAudio => fishAudioAsmrReferenceId.trim().isNotEmpty,
+    TtsProvider.fishAudioMcp => true,
     TtsProvider.dashScope => dashScopeTtsAsmrVoice.trim().isNotEmpty,
     TtsProvider.generic => genericTtsAsmrVoice.trim().isNotEmpty,
     TtsProvider.mimo => mimoTts.validationError == null,
@@ -3939,6 +3962,9 @@ $japanesePunctuationRule
       'fishAudioFormat': fishAudioFormat,
       'fishAudioLatency': fishAudioLatency,
       'fishAudioSpeed': fishAudioSpeed,
+      'fishMcpModel': fishMcpModel,
+      'fishMcpVoice': fishMcpVoice,
+      'fishMcpAutoFallback': fishMcpAutoFallback,
       'dashScopeTtsBaseUrl': dashScopeTtsBaseUrl,
       'dashScopeTtsModel': dashScopeTtsModel,
       'dashScopeTtsVoice': dashScopeTtsVoice,
@@ -4796,6 +4822,10 @@ $japanesePunctuationRule
     fishAudioFormat = preferences['fishAudioFormat'] as String? ?? 'mp3';
     fishAudioLatency = preferences['fishAudioLatency'] as String? ?? 'normal';
     fishAudioSpeed = (preferences['fishAudioSpeed'] as num?)?.toDouble() ?? 1.0;
+    fishMcpModel = preferences['fishMcpModel'] as String? ?? fishMcpModel;
+    fishMcpVoice = preferences['fishMcpVoice'] as String? ?? fishMcpVoice;
+    fishMcpAutoFallback =
+        preferences['fishMcpAutoFallback'] as bool? ?? fishMcpAutoFallback;
     dashScopeTtsBaseUrl =
         preferences['dashScopeTtsBaseUrl'] as String? ?? dashScopeTtsBaseUrl;
     dashScopeTtsModel =
@@ -6142,6 +6172,9 @@ $japanesePunctuationRule
       _preferences.setString('fish_audio_format', fishAudioFormat),
       _preferences.setString('fish_audio_latency', fishAudioLatency),
       _preferences.setDouble('fish_audio_speed', fishAudioSpeed),
+      _preferences.setString('fish_mcp_model', fishMcpModel),
+      _preferences.setString('fish_mcp_voice', fishMcpVoice),
+      _preferences.setBool('fish_mcp_auto_fallback', fishMcpAutoFallback),
       _preferences.setString('dashscope_tts_base_url', dashScopeTtsBaseUrl),
       _preferences.setString('dashscope_tts_model', dashScopeTtsModel),
       _preferences.setString('dashscope_tts_voice', dashScopeTtsVoice),

@@ -11,6 +11,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'app_controller.dart';
 import 'app_localization.dart';
 import 'ai_services.dart';
+import 'fish_mcp_service.dart';
 import 'chat_segments.dart';
 import 'mimo_tts_client.dart';
 import 'glass_ui.dart';
@@ -519,7 +520,10 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         openAiSlot: c.activeOpenAiSlot,
       );
       final voiceKey = await const SecretStore().readTtsKey(c.ttsProvider);
-      if (key.isEmpty || (c.ttsProvider.requiresApiKey && voiceKey.isEmpty)) {
+      if (key.isEmpty ||
+          (c.ttsProvider.requiresApiKey && voiceKey.isEmpty) ||
+          (c.ttsProvider == TtsProvider.fishAudioMcp &&
+              !FishMcpService.instance.isReady)) {
         throw const FormatException('API Key 未配置');
       }
       if (c.ttsProvider == TtsProvider.local) {
@@ -783,6 +787,45 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     final emotionIntensity = c.ttsEmotionIntensity;
     const voiceDirection =
         'Speak softly in an intimate whisper, slowly with gentle breaths.';
+    Future<String> synthesizeMcp() async {
+      final text = applyFishEmotionIntensityPerSentence(
+        ttsText,
+        emotionIntensity,
+        density: c.ttsCueDensity,
+        asmr: c.asmrModeEnabled,
+      );
+      try {
+        return await FishMcpService.instance.synthesize(
+          text: text,
+          voice: c.fishMcpVoice.trim().isEmpty ? null : c.fishMcpVoice.trim(),
+          model: c.fishMcpModel.trim().isEmpty ? null : c.fishMcpModel.trim(),
+          format: playbackFormat,
+          speed: c.fishAudioSpeed,
+        );
+      } on Object catch (error) {
+        if (!c.fishMcpAutoFallback) rethrow;
+        final fallbackKey = await const SecretStore().readFishAudioKey();
+        if (fallbackKey.isEmpty || c.activeFishAudioReferenceId.isEmpty) {
+          rethrow;
+        }
+        RuntimeLog.instance.warning(
+          'TTS',
+          'Fish MCP 失败，ASMR 回退 Fish Audio REST：${error.runtimeType}',
+        );
+        return FishAudioClient().synthesize(
+          apiKey: fallbackKey,
+          referenceId: c.activeFishAudioReferenceId,
+          model: c.fishAudioModel,
+          format: playbackFormat,
+          latency: c.fishAudioLatency,
+          speed: c.fishAudioSpeed,
+          baseUrl: c.fishAudioBaseUrl,
+          temperature: emotionIntensity.fishTemperature,
+          text: text,
+        );
+      }
+    }
+
     Future<String> synthesizeOnce() => switch (c.ttsProvider) {
       TtsProvider.fishAudio => FishAudioClient().synthesize(
         apiKey: apiKey,
@@ -800,6 +843,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           asmr: c.asmrModeEnabled,
         ),
       ),
+      TtsProvider.fishAudioMcp => synthesizeMcp(),
       TtsProvider.dashScope => DashScopeTtsClient().synthesize(
         apiKey: apiKey,
         baseUrl: c.dashScopeTtsBaseUrl,

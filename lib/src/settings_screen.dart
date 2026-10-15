@@ -19,6 +19,7 @@ import 'chat_segments.dart';
 import 'frame_rate_controller.dart';
 import 'runtime_log.dart';
 import 'service_api_backup.dart';
+import 'fish_mcp_service.dart';
 export 'runtime_log_screen.dart';
 import 'platform_slider.dart';
 import 'glass_ui.dart';
@@ -42,6 +43,10 @@ import 'speech_loudness.dart';
 String _activeTtsModel(AppController controller) =>
     switch (controller.ttsProvider) {
       TtsProvider.fishAudio => controller.fishAudioModel,
+      TtsProvider.fishAudioMcp =>
+        controller.fishMcpModel.isEmpty
+            ? 'MCP tools/list'
+            : controller.fishMcpModel,
       TtsProvider.dashScope => controller.dashScopeTtsModel,
       TtsProvider.generic => controller.genericTtsModel,
       TtsProvider.mimo => controller.mimoTts.model,
@@ -1789,6 +1794,8 @@ class SettingsScreenState extends State<SettingsScreen> {
     switch (provider) {
       case TtsProvider.fishAudio:
         await _showFishSettings(context);
+      case TtsProvider.fishAudioMcp:
+        await _showFishMcpSettings(context);
       case TtsProvider.dashScope:
         await _showDashScopeSettings(context);
       case TtsProvider.generic:
@@ -2142,6 +2149,162 @@ class SettingsScreenState extends State<SettingsScreen> {
     if (apiKey.text.trim().isNotEmpty) {
       await const SecretStore().writeFishAudioKey(apiKey.text);
     }
+  }
+
+  Future<void> _showFishMcpSettings(BuildContext context) async {
+    final service = FishMcpService.instance;
+    final model = TextEditingController(text: controller.fishMcpModel);
+    final voice = TextEditingController(text: controller.fishMcpVoice);
+    var autoFallback = controller.fishMcpAutoFallback;
+    var busy = false;
+    String? localError;
+    final result = await _openDetailPage<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final contentWidth = (MediaQuery.sizeOf(context).width - 32).clamp(
+            0.0,
+            728.0,
+          );
+          return SettingsDetailPage(
+            title: const Text('Fish Audio MCP'),
+            content: SizedBox(
+              width: contentWidth,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SettingsOptionCard(
+                      child: ListTile(
+                        leading: Icon(
+                          service.isReady
+                              ? Icons.check_circle_outline
+                              : Icons.cloud_outlined,
+                        ),
+                        title: Text('状态：${service.statusLabel}'),
+                        subtitle: Text(
+                          service.errorMessage ??
+                              '官方端点：${FishMcpService.endpoint}\n'
+                                  '需要 Fish Audio 账号 OAuth 授权。',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: voice,
+                      decoration: const InputDecoration(
+                        labelText: '音色标识（按 tools/list 实际 schema）',
+                        hintText: '可留空，使用账号默认音色',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: model,
+                      decoration: const InputDecoration(
+                        labelText: '模型（仅发送 schema 支持的字段）',
+                        hintText: 'Drama 3 需 tools/list 明确支持后再填写',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    SwitchListTile(
+                      value: autoFallback,
+                      onChanged: (value) =>
+                          setDialogState(() => autoFallback = value),
+                      title: const Text('MCP 失败时允许回退现有 Fish API'),
+                      subtitle: const Text('不会把 OAuth 凭据导出到普通数据备份。'),
+                    ),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () async {
+                              setDialogState(() {
+                                busy = true;
+                                localError = null;
+                              });
+                              await service.connect();
+                              if (context.mounted) {
+                                setDialogState(() {
+                                  busy = false;
+                                  localError = service.errorMessage;
+                                });
+                              }
+                            },
+                      icon: busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.login),
+                      label: Text(
+                        service.state == FishMcpConnectionState.authenticating
+                            ? '已打开授权页，完成后重新探测'
+                            : '登录并探测 tools/list',
+                      ),
+                    ),
+                    if (service.tools.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text('已发现工具（${service.tools.length}）'),
+                      const SizedBox(height: 4),
+                      for (final tool in service.tools)
+                        ListTile(
+                          dense: true,
+                          leading: Icon(
+                            tool.name == service.ttsToolName
+                                ? Icons.record_voice_over
+                                : Icons.extension_outlined,
+                          ),
+                          title: Text(tool.name),
+                          subtitle: Text(tool.description ?? '无描述'),
+                        ),
+                    ],
+                    if (service.lastDiscoveryAt != null)
+                      Text(
+                        'Drama 3：${service.drama3Supported ? '已在 MCP schema 中发现' : '未在 MCP schema 中发现'}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    if (localError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        localError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await service.logout();
+                  if (context.mounted) setDialogState(() {});
+                },
+                child: const Text('退出授权'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('保存并使用 MCP'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (result != true) return;
+    controller.configureFishMcp(
+      model: model.text,
+      voice: voice.text,
+      autoFallback: autoFallback,
+    );
   }
 
   Future<void> _showDashScopeSettings(BuildContext context) async {

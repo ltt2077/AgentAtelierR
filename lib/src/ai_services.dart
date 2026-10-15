@@ -103,6 +103,7 @@ class SecretStore {
 
   Future<String> readTtsKey(TtsProvider provider) => switch (provider) {
     TtsProvider.fishAudio => readFishAudioKey(),
+    TtsProvider.fishAudioMcp => Future.value(''),
     TtsProvider.dashScope => readDashScopeKey(),
     TtsProvider.generic => readGenericTtsKey(),
     TtsProvider.mimo => readMimoTtsKey(),
@@ -112,6 +113,7 @@ class SecretStore {
   Future<void> writeTtsKey(TtsProvider provider, String value) =>
       switch (provider) {
         TtsProvider.fishAudio => writeFishAudioKey(value),
+        TtsProvider.fishAudioMcp => Future.value(),
         TtsProvider.dashScope => writeDashScopeKey(value),
         TtsProvider.generic => writeGenericTtsKey(value),
         TtsProvider.mimo => writeMimoTtsKey(value),
