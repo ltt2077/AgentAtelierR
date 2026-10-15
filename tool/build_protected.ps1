@@ -9,6 +9,8 @@ param(
 
     [switch]$Install,
 
+    [switch]$Offline,
+
     [string]$RelayPushConfig = '',
 
     [string]$RelayServerConfig = '',
@@ -56,7 +58,9 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Spine face deformation integration patch failed.' }
         }
     }
-    & flutter pub get
+    $dependencyArgs = @('pub', 'get')
+    if ($Offline) { $dependencyArgs += '--offline' }
+    & flutter @dependencyArgs
     if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed." }
 
     $privateRelayDefines = ''

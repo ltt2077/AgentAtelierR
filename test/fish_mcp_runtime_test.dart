@@ -145,6 +145,233 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   SharedPreferences.setMockInitialValues({});
 
+  group('requested and reported model evidence', () {
+    test(
+      'official schema keeps passthrough separate from cloud model evidence',
+      () async {
+        final definition = jsonDecode(
+          File('test/fixtures/fish_mcp_text_to_speech_2026-10-16.json')
+              .readAsStringSync(),
+        ) as Map<String, dynamic>;
+        final harness = await _Harness.create(
+          client: _FakeMcpClient(
+            pages: {
+              null: ListToolsResult(tools: [Tool.fromJson(definition)]),
+            },
+          ),
+        );
+        await harness.service.discoverTools();
+        await harness.service.synthesize(
+          text: 'local fixture only',
+          model: 'drama-3',
+          voice: 'local-voice',
+          language: 'ja',
+        );
+        expect(harness.client.requests.single.arguments, {
+          'text': 'local fixture only',
+          'model': 'drama-3',
+          'voice_id': 'local-voice',
+          'language': 'ja',
+        });
+        final report = jsonDecode(harness.service.diagnosticReport) as Map;
+        final request = report['last_request'] as Map;
+        expect(request['model_argument'], 'model');
+        expect(request['model_declared_in_schema'], isFalse);
+        expect(request['schema_rejects_extra_arguments'], isTrue);
+        expect(harness.service.modelSelectionStatus, 'unreported');
+        expect(harness.service.lastReportedModel, isNull);
+      },
+    );
+
+    for (final reported in ['drama-3', 's2.1-pro']) {
+      test(
+        'compares requested drama-3 with explicit $reported metadata',
+        () async {
+          final harness = await _Harness.create(
+            client: _FakeMcpClient(
+              onCall: (_) => CallToolResult(
+                content: _inlineResult().content,
+                structuredContent: {
+                  'model': 'drama-3',
+                  'metadata': {'actual_model': reported},
+                },
+              ),
+            ),
+          );
+          expect(harness.service.lastRequestedModel, isNull);
+          expect(harness.service.lastReportedModel, isNull);
+          expect(harness.service.modelSelectionStatus, 'no_request');
+          await harness.service.discoverTools();
+          await harness.service.synthesize(text: 'local', model: 'drama-3');
+          expect(harness.client.requests.single.arguments['model'], 'drama-3');
+          expect(harness.service.lastRequestedModel, 'drama-3');
+          expect(harness.service.lastReportedModel, reported);
+          final status = reported == 'drama-3' ? 'match' : 'mismatch';
+          expect(harness.service.modelSelectionStatus, status);
+          final report = jsonDecode(harness.service.diagnosticReport) as Map;
+          expect(report['requested_model'], 'drama-3');
+          expect(report['reported_model'], reported);
+          expect(report['model_selection_status'], status);
+          expect((report['last_result'] as Map)['reported_model'], reported);
+          expect(harness.client.requests, hasLength(1));
+        },
+      );
+    }
+
+    test(
+      'a request with no response model stays unreported, never inferred',
+      () async {
+        final harness = await _Harness.create();
+        await harness.service.discoverTools();
+        await harness.service.synthesize(text: 'local', model: 'drama-3');
+        expect(harness.service.lastRequestedModel, 'drama-3');
+        expect(harness.service.lastReportedModel, isNull);
+        expect(harness.service.modelSelectionStatus, 'unreported');
+        expect(harness.client.requests.single.arguments['model'], 'drama-3');
+      },
+    );
+
+    test('service default is distinct from no submitted request', () async {
+      final harness = await _Harness.create(
+        client: _FakeMcpClient(
+          onCall: (_) => CallToolResult(
+            content: _inlineResult().content,
+            meta: const {'model': 's2.1-pro'},
+          ),
+        ),
+      );
+      await harness.service.discoverTools();
+      for (final model in <String?>[null, '', '   ']) {
+        await harness.service.synthesize(text: 'local', model: model);
+        expect(harness.service.lastRequestedModel, '');
+        expect(harness.service.lastReportedModel, 's2.1-pro');
+        expect(harness.service.modelSelectionStatus, 'server_default');
+        expect(
+          harness.client.requests.last.arguments.containsKey('model'),
+          isFalse,
+        );
+      }
+    });
+
+    test(
+      'tool errors and unknown outcomes cannot become a verified match',
+      () async {
+        final harness = await _Harness.create(
+          client: _FakeMcpClient(
+            onCall: (_) => const CallToolResult(
+              content: [TextContent(text: 'Synthetic rejection')],
+              isError: true,
+              meta: {'model': 'drama-3'},
+            ),
+          ),
+        );
+        await harness.service.discoverTools();
+        await _failure(
+          harness.service.synthesize(text: 'local', model: 'drama-3'),
+        );
+        expect(harness.service.lastRequestedModel, 'drama-3');
+        expect(harness.service.lastReportedModel, 'drama-3');
+        expect(harness.service.modelSelectionStatus, 'request_failed');
+
+        final timeoutHarness = await _Harness.create(
+          client: _FakeMcpClient(
+            onCall: (_) => throw TimeoutException('synthetic timeout'),
+          ),
+        );
+        await timeoutHarness.service.discoverTools();
+        await _failure(
+          timeoutHarness.service.synthesize(text: 'local', model: 'drama-3'),
+        );
+        expect(timeoutHarness.service.lastReportedModel, isNull);
+        expect(timeoutHarness.service.modelSelectionStatus, 'request_failed');
+      },
+    );
+
+    test(
+      'latest submitted request owns evidence despite reordered completions',
+      () async {
+        final completions = <String, Completer<CallToolResult>>{
+          'drama-3': Completer<CallToolResult>(),
+          's2.1-pro': Completer<CallToolResult>(),
+        };
+        final harness = await _Harness.create(
+          client: _FakeMcpClient(
+            onCall: (request) =>
+                completions[request.arguments['model']]!.future,
+          ),
+        );
+        await harness.service.discoverTools();
+        final older = harness.service.synthesize(text: 'old', model: 'drama-3');
+        final newer = harness.service.synthesize(
+          text: 'new',
+          model: 's2.1-pro',
+        );
+        expect(harness.service.lastRequestedModel, 's2.1-pro');
+        expect(harness.service.lastReportedModel, isNull);
+        expect(harness.service.modelSelectionStatus, 'pending');
+        completions['s2.1-pro']!.complete(
+          CallToolResult(
+            content: _inlineResult().content,
+            structuredContent: const {'model': 's2.1-pro'},
+          ),
+        );
+        await newer;
+        completions['drama-3']!.complete(
+          CallToolResult(
+            content: _inlineResult().content,
+            structuredContent: const {'model': 'old-response-model'},
+          ),
+        );
+        await older;
+        expect(harness.service.lastRequestedModel, 's2.1-pro');
+        expect(harness.service.lastReportedModel, 's2.1-pro');
+        expect(harness.service.modelSelectionStatus, 'match');
+        final report = jsonDecode(harness.service.diagnosticReport) as Map;
+        expect((report['last_request'] as Map)['requested_model'], 's2.1-pro');
+        expect((report['last_result'] as Map)['reported_model'], 's2.1-pro');
+      },
+    );
+
+    test('preflight failures preserve the prior submitted request and response pair', () async {
+      final harness = await _Harness.create();
+      await harness.service.discoverTools();
+      await harness.service.synthesize(text: 'local', model: 'drama-3');
+      final prior = jsonDecode(harness.service.diagnosticReport) as Map;
+      await harness.service.disconnect();
+      await _failure(
+        harness.service.synthesize(text: 'local', model: 's2.1-pro'),
+      );
+      final report = jsonDecode(harness.service.diagnosticReport) as Map;
+      expect(harness.service.lastRequestedModel, 'drama-3');
+      expect(harness.service.modelSelectionStatus, 'unreported');
+      expect(report['last_request'], prior['last_request']);
+      expect(report['last_result'], prior['last_result']);
+    });
+
+    test(
+      'model diagnostic labels omit URL credentials without changing arguments',
+      () async {
+        const supplied = 'https://fish.audio/model?token=private-model-secret';
+        final harness = await _Harness.create();
+        await harness.service.discoverTools();
+        await harness.service.synthesize(
+          text: 'private dialogue',
+          model: supplied,
+        );
+        expect(harness.client.requests.single.arguments['model'], supplied);
+        expect(harness.service.lastRequestedModel, '[REDACTED]');
+        expect(
+          harness.service.diagnosticReport,
+          isNot(contains('private-model-secret')),
+        );
+        expect(
+          harness.service.diagnosticReport,
+          isNot(contains('private dialogue')),
+        );
+      },
+    );
+  });
+
   test(
     'paged discovery selects generation rather than free balance tools',
     () async {

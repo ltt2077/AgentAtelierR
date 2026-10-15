@@ -89,6 +89,15 @@ class FishMcpService extends ChangeNotifier {
   Duration? lastGenerationLatency;
   Map<String, dynamic>? _lastRequestSummary;
   Map<String, dynamic>? _lastResultSummary;
+  String? _lastRequestedModel;
+  String? _lastReportedModel;
+  String _modelSelectionStatus = 'no_request';
+  int _modelRequestSerial = 0;
+
+  /// Null means no tools/call; empty means the submitted service default.
+  String? get lastRequestedModel => _lastRequestedModel;
+  String? get lastReportedModel => _lastReportedModel;
+  String get modelSelectionStatus => _modelSelectionStatus;
 
   final http.Client _downloadClient;
   final Future<Directory> Function() _temporaryDirectory;
@@ -130,6 +139,9 @@ class FishMcpService extends ChangeNotifier {
       'discovered_at': lastDiscoveryAt?.toIso8601String(),
       'drama3_listed_in_schema': drama3Supported,
       'local_input_schema_validation': false,
+      'requested_model': lastRequestedModel,
+      'reported_model': lastReportedModel,
+      'model_selection_status': modelSelectionStatus,
       'tools': tools.map((tool) => tool.toJson()).toList(),
       'last_request': _lastRequestSummary,
       'last_result': _lastResultSummary,
@@ -462,9 +474,8 @@ class FishMcpService extends ChangeNotifier {
     var stage = 'preflight';
     var submitted = false;
     final generation = _connectionGeneration;
-    _lastRequestSummary = null;
-    _lastResultSummary = null;
-    lastGenerationLatency = null;
+    var requestSerial = 0;
+    final requestedModel = fishMcpModelDiagnosticLabel(model ?? '');
     try {
       final client = _client;
       final tool = selectedTtsTool;
@@ -493,11 +504,28 @@ class FishMcpService extends ChangeNotifier {
           omitted[field] = explanation;
         },
       );
+      requestSerial = ++_modelRequestSerial;
+      _lastRequestedModel = requestedModel;
+      _lastReportedModel = null;
+      _modelSelectionStatus = 'pending';
+      lastGenerationLatency = null;
+      final properties = fishMcpSchemaProperties(tool.inputSchema);
+      final modelField = const [
+        'model',
+        'model_id',
+        'modelId',
+      ].where(arguments.containsKey).firstOrNull;
+      final modelDeclared =
+          modelField != null && properties.containsKey(modelField);
       _lastRequestSummary = {
         'tool': tool.name,
         'argument_names': arguments.keys.toList(),
         'text_utf8_bytes': utf8.encode(text).length,
-        'requested_model': ?model,
+        'requested_model': requestedModel,
+        'model_argument': ?modelField,
+        'model_declared_in_schema': modelDeclared,
+        'schema_rejects_extra_arguments':
+            tool.inputSchema['additionalProperties'] == false,
         if (omitted.isNotEmpty) 'omitted_optional_fields': omitted,
         'model_sent':
             arguments.containsKey('model') ||
@@ -505,6 +533,13 @@ class FishMcpService extends ChangeNotifier {
             arguments.containsKey('modelId'),
       };
       _lastResultSummary = null;
+      if (modelField != null && !modelDeclared) {
+        RuntimeLog.instance.warning(
+          'Fish MCP',
+          '工具 ${tool.name} 未声明模型参数；仍提交 '
+              '$modelField=$requestedModel，云端是否采用未确认。',
+        );
+      }
       lastError = null;
       errorMessage = null;
       stage = 'transport';
@@ -519,16 +554,40 @@ class FishMcpService extends ChangeNotifier {
           options: RequestOptions(timeout: const Duration(seconds: 90)),
         );
       } finally {
-        lastGenerationLatency = timer.elapsed;
+        if (requestSerial == _modelRequestSerial && _isCurrent(generation)) {
+          lastGenerationLatency = timer.elapsed;
+        }
       }
       _ensureCurrent(generation, client);
       final structured = result.structuredContentJson?.toJson();
-      _lastResultSummary = {
-        'is_error': result.isError,
-        'content_types': result.content.map((item) => item.type).toList(),
-        'structured_type': structured.runtimeType.toString(),
-        if (structured is Map) 'structured_keys': structured.keys.toList(),
-      };
+      final reportedModel = fishMcpReportedModel(result);
+      final modelStatus = result.isError
+          ? 'request_failed'
+          : requestedModel.isEmpty
+          ? 'server_default'
+          : reportedModel == null
+          ? 'unreported'
+          : requestedModel == reportedModel
+          ? 'match'
+          : 'mismatch';
+      if (requestSerial == _modelRequestSerial) {
+        _lastReportedModel = reportedModel;
+        _modelSelectionStatus = modelStatus;
+        _lastResultSummary = {
+          'is_error': result.isError,
+          'content_types': result.content.map((item) => item.type).toList(),
+          'structured_type': structured.runtimeType.toString(),
+          if (structured is Map) 'structured_keys': structured.keys.toList(),
+          'reported_model': reportedModel,
+          'model_selection_status': modelStatus,
+        };
+        RuntimeLog.instance.info(
+          'Fish MCP',
+          '模型响应证据：requested=${requestedModel.isEmpty ? "服务默认" : requestedModel}, '
+              'reported=${reportedModel ?? "未返回"}, status=$modelStatus',
+        );
+        if (!_disposed) notifyListeners();
+      }
       stage = 'result';
       if (result.isError) {
         throw FishMcpException.fromToolResult(result, stage: stage);
@@ -582,7 +641,13 @@ class FishMcpService extends ChangeNotifier {
         outcomeUnknown: submitted && stage == 'transport',
         generationSubmitted: submitted,
       );
-      if (generation == _connectionGeneration && !_disposed) {
+      if (generation == _connectionGeneration &&
+          !_disposed &&
+          (requestSerial == 0 || requestSerial == _modelRequestSerial)) {
+        if (submitted) {
+          _modelSelectionStatus = 'request_failed';
+          _lastResultSummary?['model_selection_status'] = 'request_failed';
+        }
         _recordError(error);
       }
       throw error;
@@ -686,6 +751,9 @@ class FishMcpService extends ChangeNotifier {
 
   Future<void> disconnect({bool clearError = false}) async {
     _connectionGeneration++;
+    if (_modelSelectionStatus == 'pending') {
+      _modelSelectionStatus = 'request_failed';
+    }
     final client = _client;
     _client = null;
     _pendingAuthorization = null;

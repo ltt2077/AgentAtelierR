@@ -2192,7 +2192,10 @@ class SettingsScreenState extends State<SettingsScreen> {
               }
               if (name == null) {
                 if (kind == '模型') {
-                  return '所选模型直接发送至云端，由服务判断可用性。';
+                  return selectedTool.inputSchema['additionalProperties'] ==
+                          false
+                      ? '当前工具没有模型字段，且声明不接受额外参数。仍会提交所选模型，但云端可能忽略或拒绝，无法保证切换。'
+                      : '当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。';
                 }
                 return '音色标识可直接填写，由云端服务处理。';
               }
@@ -2210,6 +2213,24 @@ class SettingsScreenState extends State<SettingsScreen> {
               'speaker',
               'reference_id',
             ]);
+            final lastRequestedModel = service.lastRequestedModel;
+            final hasRecentRequest =
+                lastRequestedModel != null ||
+                service.lastGenerationLatency != null;
+            final recentRequestUsesOldModel =
+                hasRecentRequest &&
+                model.trim() != (lastRequestedModel?.trim() ?? '');
+            final reportedModel = service.lastReportedModel?.trim();
+            final modelSelectionStatus = switch (service.modelSelectionStatus) {
+              'no_request' => '暂无调用记录',
+              'pending' => '请求中，等待云端返回',
+              'request_failed' => '请求失败，未确认本次模型选择',
+              'server_default' => '请求使用服务默认模型',
+              'unreported' => '云端未返回模型标识，无法确认已切换',
+              'match' => '云端返回模型与最近请求一致',
+              'mismatch' => '云端返回模型与最近请求不同',
+              final status => status,
+            };
             final connecting =
                 busy ||
                 service.state == FishMcpConnectionState.connecting ||
@@ -2311,13 +2332,41 @@ class SettingsScreenState extends State<SettingsScreen> {
                         describeField(modelField, '模型'),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
+                      Text(
+                        '当前选择仅为草稿，点击“保存并使用 MCP”后下次请求才生效；返回或取消不会保存。',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      SelectableText(
+                        '最近请求模型：${!hasRecentRequest
+                            ? '暂无调用记录'
+                            : lastRequestedModel?.trim().isNotEmpty == true
+                            ? lastRequestedModel!.trim()
+                            : '服务默认（不指定模型）'}',
+                        key: const ValueKey('fish-mcp-last-requested-model'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      SelectableText(
+                        '云端返回模型：${reportedModel?.isNotEmpty == true ? reportedModel : '未返回模型标识，无法确认已切换'}',
+                        key: const ValueKey('fish-mcp-last-reported-model'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Text(
+                        '最近调用状态：$modelSelectionStatus',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (recentRequestUsesOldModel)
+                        Text(
+                          '最近调用使用的是旧设置，不能作为当前选择的结果；保存后下一次请求才生效。',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       SwitchListTile(
                         value: autoFallback,
                         onChanged: (value) =>
                             setDialogState(() => autoFallback = value),
                         title: const Text('MCP 失败时允许回退现有 Fish API'),
                         subtitle: const Text(
-                          '默认关闭。开启后，仅在 MCP 尚未提交生成、且本地准备失败时回退。使用现有 Fish API Key、模型和音色配置，可能消耗独立的开发者 API 余额；Plus 会员权益不代表开发者 API 余额。OAuth 凭据不会导出到普通备份。',
+                          '默认关闭。仅在 MCP 未提交生成且本地准备失败时回退。使用现有 Fish API Key 和音色；已选模型保持不变，服务默认时使用 API 模型配置。可能消耗独立的开发者 API 余额。OAuth 凭据不导出到普通备份。',
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -2410,7 +2459,7 @@ class SettingsScreenState extends State<SettingsScreen> {
                         Text(
                           service.drama3Supported
                               ? 'Drama 3：当前 TTS 工具的模型 schema 声明支持；实际权益与生成能力仍由服务端校验。'
-                              : 'Drama 3：当前 schema 未列出该模型枚举，仍可选择并请求云端服务。',
+                              : 'Drama 3：当前工具未声明支持，选择并提交不代表云端已切换。',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       const SizedBox(height: 8),

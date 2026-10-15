@@ -30,6 +30,142 @@ Matcher failureWith(String code) =>
 CallToolResult contentResult(Content block) => CallToolResult(content: [block]);
 
 void main() {
+  group('model evidence uses explicit response metadata only', () {
+    for (final key in const [
+      'model',
+      'model_id',
+      'modelId',
+      'model_name',
+      'modelName',
+      'actual_model',
+      'used_model',
+    ]) {
+      test('reads $key from nested generation metadata', () {
+        expect(
+          fishMcpReportedModel(
+            CallToolResult(
+              content: const [],
+              structuredContent: {
+                'result': {
+                  'data': [
+                    {
+                      'generation': {
+                        'metadata': {key: 'drama-3'},
+                      },
+                    },
+                  ],
+                },
+              },
+            ),
+          ),
+          'drama-3',
+        );
+      });
+    }
+
+    test('reads meta, extra, and text JSON without scanning prose', () {
+      for (final result in [
+        const CallToolResult(content: [], meta: {'model': 's2.1-pro'}),
+        const CallToolResult(
+          content: [],
+          extra: {
+            'metadata': {'used_model': 's2.1-pro'},
+          },
+        ),
+        const CallToolResult(
+          content: [
+            TextContent(
+              text: '{"result":{"metadata":{"actual_model":"s2.1-pro"}}}',
+            ),
+          ],
+        ),
+      ]) {
+        expect(fishMcpReportedModel(result), 's2.1-pro');
+      }
+      expect(
+        fishMcpReportedModel(
+          const CallToolResult(
+            content: [TextContent(text: 'Generated with model drama-3')],
+            structuredContent: {
+              'description': 'The model is drama-3',
+              'voice_name': 's2.1-pro',
+              'voice': {'model': 's2.1-pro'},
+              'request': {'model': 'drama-3'},
+              'input': {'model': 'drama-3'},
+            },
+          ),
+        ),
+        isNull,
+      );
+    });
+
+    test('nested actual model takes precedence over a wrapper model echo', () {
+      expect(
+        fishMcpReportedModel(
+          const CallToolResult(
+            content: [],
+            structuredContent: {
+              'model': 'drama-3',
+              'generation': {'actual_model': 's2.1-pro'},
+            },
+          ),
+        ),
+        's2.1-pro',
+      );
+    });
+
+    test('explicit used model takes precedence across response sources', () {
+      expect(
+        fishMcpReportedModel(
+          const CallToolResult(
+            content: [
+              TextContent(text: '{"result":{"used_model":"s2.1-pro"}}'),
+            ],
+            structuredContent: {'model': 'drama-3'},
+          ),
+        ),
+        's2.1-pro',
+      );
+    });
+
+    test('keeps actual model precedence and rejects unsafe or long labels', () {
+      expect(
+        fishMcpReportedModel(
+          const CallToolResult(
+            content: [],
+            structuredContent: {
+              'model': 'generic-wrapper',
+              'actual_model': 'drama-3',
+            },
+          ),
+        ),
+        'drama-3',
+      );
+      for (final value in [
+        '',
+        'https://fish.audio/audio.mp3?token=do-not-show',
+        'Bearer do-not-show',
+        'drama-3\nPRIVATE_DIALOGUE',
+        'x' * 97,
+      ]) {
+        expect(
+          fishMcpReportedModel(
+            CallToolResult(
+              content: const [],
+              structuredContent: {'model': value},
+            ),
+          ),
+          isNull,
+        );
+      }
+      expect(fishMcpModelDiagnosticLabel('  drama-3  '), 'drama-3');
+      expect(
+        fishMcpModelDiagnosticLabel('https://fish.audio/model?token=secret'),
+        '[REDACTED]',
+      );
+    });
+  });
+
   group('MCP errors preserve evidence without exposing credentials', () {
     test(
       'structured tool failure keeps code, message, status and request ID',

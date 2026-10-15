@@ -826,15 +826,17 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         if (fallbackKey.isEmpty || c.activeFishAudioReferenceId.isEmpty) {
           rethrow;
         }
+        final fallbackModel = c.fishMcpRestFallbackModel;
         RuntimeLog.instance.warning(
           'TTS',
-          'Fish MCP 未提交生成请求，ASMR 按已启用的设置回退 Fish Audio REST：$error',
+          'Fish MCP 未提交生成请求，ASMR 按已启用的设置回退 Fish Audio REST，'
+              'requestedModel=$fallbackModel：$error',
         );
         actualProvider = TtsProvider.fishAudio;
         return FishAudioClient().synthesize(
           apiKey: fallbackKey,
           referenceId: c.activeFishAudioReferenceId,
-          model: c.fishAudioModel,
+          model: fallbackModel,
           format: playbackFormat,
           latency: c.fishAudioLatency,
           speed: c.fishAudioSpeed,

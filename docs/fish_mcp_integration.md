@@ -10,10 +10,11 @@
 - OAuth access token、refresh token、有效期和客户端 ID 使用独立的安全存储命名空间；普通 API 服务导出不会包含这些内容。
 - 授权回调使用 `fishmcp://oauth/callback`。Android 已配置 intent-filter，Windows 使用 `app_links` 的同一自定义 scheme；Windows 启动时会在当前用户注册 `fishmcp` URL 协议。
 - 授权后先执行 `tools/list`，保存工具名、描述和完整 input schema；未完成工具探测时，生成请求会被阻止。
-- 参考工具 schema 的参数名构造请求，取消客户端 schema 拒绝校验；模型即使没有在字段或枚举里列出也原样提交，使用声明的模型别名或默认 `model` 字段，由云端判断可用性。
+- 参考工具 schema 的参数名构造请求，取消客户端 schema 拒绝校验；按用户要求保留所选模型的透传，使用声明的模型别名或默认 `model` 字段。用户最新提供的真实 schema 没有模型选择字段，且 `additionalProperties: false`，所以透传模型属于公开契约之外的参数，不能保证服务接受或采用。
 - 支持 MCP 返回的内嵌音频，以及 `https://*.fish.audio` 音频 URL；拒绝非 HTTPS 或非 Fish Audio 域名。
 - MCP 连接失败不会自动删除现有 Fish REST 配置。设置页保留 MCP 失败回退开关字段，原有 Provider 可随时切回。
 - MCP 模型提供下拉选择：`s2.1-pro-free`、`s2.1-pro`、`drama-3`，兼容已保存的自定义值；“服务默认”不指定模型。客户端不根据 schema 阻止模型选择或提交。
+- 模型和音色修改先作为本页草稿，点击“保存并使用 MCP”后下次调用才生效；返回或取消不会自动保存。模型下方显示最近请求、云端返回及状态，草稿与最近请求不同时会标明旧记录不能作为本次选择的结果。
 - 普通音色与 ASMR 音色分别设置，ASMR 留空沿用普通音色；持续 ASMR 始终优先使用 ASMR 音色。已有单音色配置兼容为普通音色，新字段支持持久化与普通配置备份。科洛蒂娅固定音色 ID 在页面只读显示，MCP 模式下和主角共用当前 MCP 模型与连接，仅为真实台词生成语音。
 
 ## 2026-10-15 StateError 修复
@@ -25,7 +26,7 @@
 - 解析 AudioContent、ResourceLink、EmbeddedResource、Markdown 链接、嵌套 JSON，以及数组或字符串形式的 structuredContent；按实际音频容器保存文件后缀。
 - 下载不携带 OAuth 凭据，逐次验证 HTTPS 重定向，限制超时和文件大小。未知外部 CDN 明确报域名错误，不自动信任所有主机。
 - 设置页实时反映异步 OAuth / 连接状态，断开后丢弃晚到结果；日志区分选择的 provider 与实际使用的 provider。
-- REST 回退默认关闭，保留用户以前明确保存的开关值。开启时，仅在本地准备失败、尚未提交 MCP 生成时允许回退；提交后结果未知、工具报错、下载或音频校验失败均不自动回退或再次生成。
+- REST 回退默认关闭，保留用户以前明确保存的开关值。开启时，仅在本地准备失败、尚未提交 MCP 生成时允许回退；回退沿用明确选择的 MCP 模型，只有选择“服务默认”时才使用原 API 模型。提交后结果未知、工具报错、下载或音频校验失败均不自动回退或再次生成。
 
 已从设备 `a43d2d7a` 的已有日志确认：`MCP StateError → REST 回退 → POST /v1/tts → HTTP 402`。402 的 message 为 `Insufficient API credit. API credit is managed independently from platform credit.`，来自 REST。用户已说明模型设置用于测试回退，当前问题聚焦 MCP StateError。旧日志缺少 MCP 原始错误与实际 schema，不能追溯出那次失败的唯一原因，也不能据此认定 Plus 会员无权益、Team 不一致或 MCP 计费异常。
 
@@ -44,7 +45,7 @@
 - `POST https://api.fish.audio/mcp` 返回 `401`，保护资源元数据为 `https://api.fish.audio/.well-known/oauth-protected-resource/mcp`。
 - 授权服务器为 `https://api.fish.audio`，scope 为 `mcp`，支持 PKCE S256。
 - 授权端点为 `https://fish.audio/oauth/authorize/`，token 端点为 `https://api.fish.audio/oauth/token`，动态注册端点为 `https://api.fish.audio/oauth/register`。
-- Fish Audio API 有 `drama-3` 模型。MCP 可以直接提交所选模型；是否出现在工具 schema 中不作为本地阻止依据，生成结果由云端返回。
+- Fish Audio API 有 `drama-3` 模型。客户端按用户要求允许 MCP 提交所选模型；后续取得的真实 MCP schema 没有模型选择字段，不能因此推定 REST 的模型切换能力同样适用于 MCP。
 - 官方文档说明 MCP 语音生成使用账号套餐积分；端点初次探测时未登录账号，未核验当前账号套餐余额或实际扣费。
 
 ## 首次使用
@@ -53,9 +54,39 @@
 2. 点击“登录并探测 tools/list”，在浏览器完成 Fish Audio 登录和授权。
 3. 浏览器回调回应用后会自动连接，直到显示“工具已探测”。
 4. 查看工具列表和 Drama 3 状态；只有识别到 TTS 工具后才可以将 Provider 保存为 MCP。
-5. 选择模型和音色；服务默认表示不指定模型。所选模型原样提交给云端，不受本地 schema 枚举限制。已开启的 REST 回退使用原有 API 配置，与 MCP 模型选择分别保存。
+5. 选择模型和音色后，点击“保存并使用 MCP”；返回或取消会丢弃本页草稿。服务默认表示不指定模型。所选模型按用户要求透传，但当前真实 MCP schema 没有此字段，不保证云端采用。已开启的 REST 回退使用原有 API Key 和音色，模型沿用明确选择的 MCP 模型；只有 MCP 选择服务默认时才使用原 API 模型。
 
 如果授权页面无法自动回到应用，请保留页面中的回调地址并重新打开应用后再次连接；当前 PKCE 状态只在本次进程内有效，进程被系统杀死后需要重新发起登录。
+
+## 2026-10-16 模型选择排查与本轮更新
+
+用户提供的日志显示：00:07 的调用因旧版客户端 schema 校验而回退 REST；00:30 和 00:31 的调用均选择 `drama-3`，`actualProvider` 为 Fish Audio MCP。后两次不能归因于 REST 回退。用户同时反馈 Fish Audio 网页生成记录仍显示 S2.1 Pro。
+
+用户随后提供了实际 `text_to_speech` 的完整 inputSchema，已确认公开输入契约如下：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `text` | 是 | 要生成语音的文本。 |
+| `voice_id` | 否 | 指定音色 ID。 |
+| `language` | 否 | 仅在未指定 `voice_id` 时，用于选择默认音色。 |
+
+`properties` 只有以上三个字段，`required` 只有 `text`，并明确声明 `additionalProperties: false`。其中没有 `model`、`model_id` 或其他模型切换字段。`language` 不能据此解释为切换已选音色的语言或更换生成模型。
+
+因此，当前 MCP 公开契约并不承诺按请求切换模型。客户端继续按用户要求透传模型配置，不能把请求中带有 `model=drama-3` 当作云端采用了 Drama 3 的证据；额外参数也可能被服务拒绝或忽略。现有事实与“通过 MCP 请求但网页仍显示 S2.1 Pro”并不矛盾，尚需服务端明确的实际模型响应或官方说明才能确认具体处理方式。
+
+当前源码修复并增加以下诊断：
+
+- 聊天及持续 ASMR 的授权回退保留明确选择的 MCP 模型，避免使用旧 API 模型；普通 API 模型设置独立保存。
+- 设置页区分尚未保存的草稿与最近已提交的请求，展示最近请求模型、云端返回模型及状态。未返回模型标识时明确显示无法确认切换，不把下拉选择或音频生成成功当作模型已生效。
+- 脱敏诊断新增 `requested_model`、`reported_model`、`model_selection_status`；仍包含真实工具 inputSchema 和实际参数名。云端返回标识只是响应证据，与请求一致也不等于独立验证了后台执行模型；不同标识可能存在别名，需结合官方说明或生成记录判断。
+- 返回模型提取先在结构化结果、元数据、附加字段及 JSON 文本中查找明确的 `actual_model`、`used_model`，再查找普通的 `model`、`model_id`、`modelId`、`model_name`、`modelName`。明确的实际模型字段优先于外层普通模型回显；不会从自然语言、音色名称或请求参数对象猜测模型。
+- 并发请求按提交顺序归属最近的诊断，较早响应或失败不会覆盖较新的模型记录与日志。本地准备失败不抹掉上次已提交请求的证据；连接取消后的晚到结果也不能作为当前连接的模型结果。
+
+设置页的调用状态包括暂无记录、请求中、请求失败、服务默认、云端未返回、返回一致及返回不一致。“返回一致”只说明响应元数据与请求相同；“云端未返回”会明确提示无法确认切换，不能把它解释为已经使用所选模型。
+
+如需留存后续证据，请在 MCP 设置页展开 `text_to_speech`，点击“复制工具与完整 inputSchema”；也可点击“复制连接 / 错误诊断（已脱敏）”。本轮已取得用户提供的真实 schema，无需为此重新生成语音。客户端继续按用户要求透传所选模型，不自动追加其他未经证实的字段或 REST 请求头，也不自动重试生成。
+
+本轮验证：完整测试 1375 项通过、61 项跳过，包含 107 项 MCP 协议、运行时、配置及设置测试；完整 `flutter analyze --no-pub` 无问题。真实工具定义已保存为 `test/fixtures/fish_mcp_text_to_speech_2026-10-16.json`，用于确认无模型字段时继续透传、准确提示契约限制且不误报成功。均为本地验证，未调用真实生成或消耗积分。新加密构建、包体检查与附件哈希见[发布说明](CHANGELOG_1.0.4.1_MCP_FishAudio.md)。
 
 ## Windows OAuth 回调与打包
 
@@ -69,9 +100,9 @@ Windows 发布包需要包含完整 Release 目录及生成的插件和 `data` �
 
 ## 尚未验证
 
-- 需要用户账号授权后才能确认 Fish Audio 实际工具名、输入 schema、音频返回结构和 Drama 3 是否可选。
-- 尚未发起真实语音生成，因此没有进行积分消耗测试，也没有声线效果结论。
-- StateError 修复后的加密 Android debug 已覆盖安装；本版两端 release 的编译与包体校验不代表真实生成、Windows OAuth 或试听验收。
+- 已取得用户提供的真实 `text_to_speech` inputSchema；其中没有模型切换字段。仍未取得证明云端实际执行模型的元数据、额外 `model` 参数处理规则及各模型权益证据；模型下拉与本地模拟测试不能代替在线验收。
+- 本轮修复没有发起真实语音生成，没有新增积分消耗或声线效果结论。用户已有两次调用日志显示走 MCP，尚不能确定为何网页记录仍显示 S2.1 Pro。
+- 早先 StateError 修复后的加密 Android debug 已覆盖安装，上一轮也有两端 release；这些旧产物不代表本轮模型诊断修复已交付。新构建状态见发布说明，包体检查也不能代替真实云端模型、Windows OAuth 或试听验收。
 
 ## 回滚
 

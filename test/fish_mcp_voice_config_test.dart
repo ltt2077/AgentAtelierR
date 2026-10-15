@@ -1,6 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:ryza_chat_mvp/src/ai_services.dart';
 import 'package:ryza_chat_mvp/src/app_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,6 +17,47 @@ void main() {
     addTearDown(controller.dispose);
     return controller;
   }
+
+  test(
+    'REST fallback sends the selected MCP model instead of the old API model',
+    () async {
+      final controller = await load();
+      controller.fishAudioModel = 's2.1-pro';
+      controller.configureFishMcp(
+        model: 'drama-3',
+        voice: 'local-voice',
+        autoFallback: true,
+      );
+      final models = <String?>[];
+      final client = MockClient((request) async {
+        models.add(request.headers['model']);
+        return http.Response.bytes(
+          [0x49, 0x44, 0x33],
+          200,
+          headers: {'content-type': 'audio/mpeg'},
+        );
+      });
+      addTearDown(client.close);
+      await FishAudioClient(client: client).synthesizeBytes(
+        apiKey: 'local-test-only',
+        referenceId: 'local-voice',
+        text: 'local test',
+        model: controller.fishMcpRestFallbackModel,
+      );
+      expect(models, ['drama-3']);
+      expect(controller.fishAudioModel, 's2.1-pro');
+    },
+  );
+
+  test(
+    'service-default MCP selection retains the configured REST fallback model',
+    () async {
+      final controller = await load();
+      controller.fishAudioModel = 's2.1-pro-free';
+      controller.configureFishMcp(model: '', voice: '', autoFallback: true);
+      expect(controller.fishMcpRestFallbackModel, 's2.1-pro-free');
+    },
+  );
 
   test(
     'ordinary and ASMR requests choose separate configured voices',

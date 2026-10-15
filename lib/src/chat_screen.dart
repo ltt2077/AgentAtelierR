@@ -4830,15 +4830,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (fallbackKey.isEmpty || fallbackReferenceId.isEmpty) {
           rethrow;
         }
+        final fallbackModel = widget.controller.fishMcpRestFallbackModel;
         RuntimeLog.instance.warning(
           'TTS',
-          'Fish MCP 未提交生成请求，按已启用的设置回退 Fish Audio REST：$error',
+          'Fish MCP 未提交生成请求，按已启用的设置回退 Fish Audio REST，'
+              'requestedModel=$fallbackModel：$error',
         );
         actualProvider = TtsProvider.fishAudio;
         return _fishAudioClient.synthesize(
           apiKey: fallbackKey,
           referenceId: fallbackReferenceId,
-          model: widget.controller.fishAudioModel,
+          model: fallbackModel,
           format: format,
           latency: widget.controller.fishAudioLatency,
           speed: speed,

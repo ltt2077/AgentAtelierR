@@ -3793,6 +3793,10 @@ $japanesePunctuationRule
   String get activeFishMcpVoice =>
       fishMcpVoiceForMode(asmr: ttsVoiceMode == TtsVoiceMode.asmr);
 
+  /// An explicitly selected MCP model must survive an authorized REST fallback.
+  String get fishMcpRestFallbackModel =>
+      fishMcpModel.trim().isNotEmpty ? fishMcpModel.trim() : fishAudioModel;
+
   String fishMcpVoiceForMode({required bool asmr}) =>
       asmr && fishMcpAsmrVoice.trim().isNotEmpty
       ? fishMcpAsmrVoice.trim()

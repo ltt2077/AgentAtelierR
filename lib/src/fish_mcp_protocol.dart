@@ -278,6 +278,87 @@ String redactFishMcpText(String value) {
   );
 }
 
+/// A bounded diagnostic label only; this never changes generation arguments.
+String fishMcpModelDiagnosticLabel(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return '';
+  if (trimmed.length > 96 ||
+      trimmed.contains('://') ||
+      RegExp(r'\bBearer\b', caseSensitive: false).hasMatch(trimmed) ||
+      !RegExp(r'^[A-Za-z0-9][A-Za-z0-9 ._:/+\-]*$').hasMatch(trimmed) ||
+      redactFishMcpText(trimmed) != trimmed) {
+    return '[REDACTED]';
+  }
+  return trimmed;
+}
+
+/// Reads explicit response metadata, never prose, voice names, or request echoes.
+/// A missing model field does not establish which model generated the audio.
+String? fishMcpReportedModel(CallToolResult result) {
+  const actualModelFields = ['actual_model', 'used_model'];
+  const modelFields = [
+    'model',
+    'model_id',
+    'modelId',
+    'model_name',
+    'modelName',
+  ];
+  const containers = [
+    'generation',
+    'result',
+    'data',
+    'metadata',
+    '_meta',
+    'meta',
+    'output',
+    'response',
+  ];
+  String? read(Object? value, List<String> fields, [int depth = 0]) {
+    if (depth > 10) return null;
+    if (value is Map) {
+      for (final field in fields) {
+        final raw = value[field];
+        if (raw is! String) continue;
+        final name = fishMcpModelDiagnosticLabel(raw);
+        if (name.isNotEmpty && name != '[REDACTED]') return name;
+      }
+      for (final field in containers) {
+        final name = read(value[field], fields, depth + 1);
+        if (name != null) return name;
+      }
+    } else if (value is List) {
+      for (final child in value.take(32)) {
+        final name = read(child, fields, depth + 1);
+        if (name != null) return name;
+      }
+    }
+    return null;
+  }
+
+  final sources = <Object?>[
+    result.hasStructuredContent ? result.structuredContentJson?.toJson() : null,
+    result.meta,
+    result.extra,
+  ];
+  for (final block in result.content.whereType<TextContent>()) {
+    final text = block.text.trim();
+    if (text.length > 1024 * 1024 ||
+        (!text.startsWith('{') && !text.startsWith('['))) {
+      continue;
+    }
+    sources.add(_decodeJsonOrText(text));
+  }
+  // An outer wrapper can echo the requested model while generation metadata
+  // reports the model used. Prefer explicit actual/used fields across sources.
+  for (final fields in [actualModelFields, modelFields]) {
+    for (final source in sources) {
+      final name = read(source, fields);
+      if (name != null) return name;
+    }
+  }
+  return null;
+}
+
 class FishMcpToolDefinition {
   const FishMcpToolDefinition({
     required this.name,

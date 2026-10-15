@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,6 +29,18 @@ void main() {
     service.lastDiscoveryAt = null;
   });
 
+  Future<void> openMcpPage(WidgetTester tester) async {
+    final entry = find.byKey(const ValueKey('tts-settings-fishAudioMcp'));
+    await tester.scrollUntilVisible(
+      entry,
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+  }
+
   Future<AppController> openSettings(WidgetTester tester) async {
     final controller = (await tester.runAsync(AppController.load))!;
     addTearDown(controller.dispose);
@@ -44,15 +57,7 @@ void main() {
         ),
       ),
     );
-    final entry = find.byKey(const ValueKey('tts-settings-fishAudioMcp'));
-    await tester.scrollUntilVisible(
-      entry,
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.ensureVisible(entry);
-    await tester.tap(entry);
-    await tester.pumpAndSettle();
+    await openMcpPage(tester);
     return controller;
   }
 
@@ -100,7 +105,7 @@ void main() {
       find.byKey(const ValueKey('fish-mcp-model-')),
     );
     expect(model.onChanged, isNotNull);
-    expect(find.text('所选模型直接发送至云端，由服务判断可用性。'), findsOneWidget);
+    expect(find.text('当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。'), findsOneWidget);
 
     // A service notification outside this route (such as an OAuth callback)
     // must rebuild it without another user tap.
@@ -111,6 +116,30 @@ void main() {
       find.byKey(const ValueKey('fish-mcp-tool-text_to_speech')),
       findsNothing,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('official schema warns without blocking a saved model', (
+    tester,
+  ) async {
+    final tool = jsonDecode(
+      File('test/fixtures/fish_mcp_text_to_speech_2026-10-16.json')
+          .readAsStringSync(),
+    ) as Map<String, dynamic>;
+    discover(schema: tool['inputSchema'] as Map<String, dynamic>);
+    SharedPreferences.setMockInitialValues({'fish_mcp_model': 'drama-3'});
+    final controller = await openSettings(tester);
+    expect(
+      find.text('当前工具没有模型字段，且声明不接受额外参数。仍会提交所选模型，但云端可能忽略或拒绝，无法保证切换。'),
+      findsOneWidget,
+    );
+    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const ValueKey('fish-mcp-model-drama-3')),
+    );
+    expect(dropdown.onChanged, isNotNull);
+    await tester.tap(find.text('保存并使用 MCP'));
+    await tester.pumpAndSettle();
+    expect(controller.fishMcpModel, 'drama-3');
     expect(tester.takeException(), isNull);
   });
 
@@ -140,7 +169,7 @@ void main() {
     }
     await tester.tap(find.text('drama-3').hitTestable());
     await tester.pumpAndSettle();
-    expect(find.text('所选模型直接发送至云端，由服务判断可用性。'), findsOneWidget);
+    expect(find.text('当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。'), findsOneWidget);
     expect(find.text('清空未受支持的模型设置'), findsNothing);
     await tester.tap(find.text('保存并使用 MCP'));
     await tester.pumpAndSettle();
@@ -176,6 +205,57 @@ void main() {
     expect(controller.fishMcpModel, 'custom-model');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'MCP model changes need saving and reopen with the saved choice',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({'fish_mcp_model': 's2.1-pro'});
+      final controller = await openSettings(tester);
+      expect(
+        find.text('当前选择仅为草稿，点击“保存并使用 MCP”后下次请求才生效；返回或取消不会保存。'),
+        findsOneWidget,
+      );
+      expect(find.text('云端返回模型：未返回模型标识，无法确认已切换'), findsOneWidget);
+
+      Future<void> selectModel(String current, String next) async {
+        final dropdown = find.byKey(ValueKey('fish-mcp-model-$current'));
+        await tester.ensureVisible(dropdown);
+        await tester.tap(dropdown);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(next).hitTestable());
+        await tester.pumpAndSettle();
+      }
+
+      await selectModel('s2.1-pro', 'drama-3');
+      expect(controller.fishMcpModel, 's2.1-pro');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      await openMcpPage(tester);
+      expect(
+        tester
+            .widget<DropdownButtonFormField<String>>(
+              find.byKey(const ValueKey('fish-mcp-model-s2.1-pro')),
+            )
+            .initialValue,
+        's2.1-pro',
+      );
+
+      await selectModel('s2.1-pro', 's2.1-pro-free');
+      await tester.tap(find.text('保存并使用 MCP'));
+      await tester.pumpAndSettle();
+      expect(controller.fishMcpModel, 's2.1-pro-free');
+      await openMcpPage(tester);
+      expect(
+        tester
+            .widget<DropdownButtonFormField<String>>(
+              find.byKey(const ValueKey('fish-mcp-model-s2.1-pro-free')),
+            )
+            .initialValue,
+        's2.1-pro-free',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('stored model and editable voice survive missing schema fields', (
     tester,
@@ -301,7 +381,7 @@ void main() {
     final decoded = jsonDecode(copied!) as Map<String, dynamic>;
     expect(decoded['name'], 'text_to_speech');
     expect(decoded['inputSchema'], schema);
-    expect(find.textContaining('仍可选择并请求云端服务'), findsOneWidget);
+    expect(find.textContaining('选择并提交不代表云端已切换'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
