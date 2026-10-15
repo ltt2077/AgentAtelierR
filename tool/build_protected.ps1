@@ -22,6 +22,40 @@ $keyFile = Join-Path $projectRoot ".asset_protection\character_assets.key"
 
 Push-Location $projectRoot
 try {
+    # The separately acquired Spine runtime is local-only. Reapply the small
+    # checked-in integration patch when building from an unpatched checkout.
+    $faceRuntimePath = Join-Path $projectRoot 'packages\spine_flutter\lib\spine_flutter.dart'
+    if (Test-Path -LiteralPath $faceRuntimePath) {
+        $faceRuntimeSource = Get-Content -LiteralPath $faceRuntimePath -Raw
+        $faceApiReady = $faceRuntimeSource.Contains('List<double> getDeform()') -and
+            $faceRuntimeSource.Contains('int get runtimeIdentity') -and
+            $faceRuntimeSource.Contains('List<PhysicsConstraint> getPhysicsConstraints()')
+        foreach ($relativePath in @(
+            'lib\spine_flutter_bindings_generated.dart',
+            'src\spine-cpp-lite\spine-cpp-lite.h',
+            'src\spine-cpp-lite\spine-cpp-lite.cpp'
+        )) {
+            $faceApiPath = Join-Path $projectRoot "packages\spine_flutter\$relativePath"
+            if (-not (Test-Path -LiteralPath $faceApiPath) -or
+                -not (Get-Content -LiteralPath $faceApiPath -Raw).Contains('spine_slot_set_deform')) {
+                $faceApiReady = $false
+            }
+        }
+        $physicsBindings = Join-Path $projectRoot 'packages\spine_flutter\lib\spine_flutter_bindings_generated.dart'
+        if (Test-Path -LiteralPath $physicsBindings) {
+            if (-not (Get-Content -LiteralPath $physicsBindings -Raw).Contains("'spine_physics_constraint_reset_fully'")) {
+                $faceApiReady = $false
+            }
+        }
+        if (-not $faceApiReady) {
+            $facePatchPython = Get-Command python -ErrorAction SilentlyContinue
+            if ($null -eq $facePatchPython) {
+                throw 'Spine face deformation API is missing. Run tool/apply_spine_face_deform_patch.py with Python, then rebuild.'
+            }
+            & $facePatchPython.Source (Join-Path $projectRoot 'tool\apply_spine_face_deform_patch.py')
+            if ($LASTEXITCODE -ne 0) { throw 'Spine face deformation integration patch failed.' }
+        }
+    }
     & flutter pub get
     if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed." }
 

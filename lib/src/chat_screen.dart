@@ -86,6 +86,8 @@ import 'local_tts_client.dart';
 import 'local_tts_models.dart';
 import 'appearance_picker_page.dart';
 import 'character_spine_view.dart';
+import 'character_face_pull_rig.dart';
+import 'character_touch_physics_rig.dart';
 import 'virtual_phone.dart';
 import 'virtual_phone_wallpaper_page.dart';
 
@@ -273,7 +275,7 @@ class _CachedSpeechSegment {
       );
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _audioPlayer = AudioPlayer();
   final _effectPlayer = AudioPlayer();
   late final _aiClient = OpenAiCompatibleClient(
@@ -363,6 +365,8 @@ class _ChatScreenState extends State<ChatScreen> {
   DateTime? _gazeStartedAt;
   bool _gazeHeld = false;
   final _bodyGaze = CharacterBodyGaze();
+  final _facePull = CharacterFacePullRig();
+  final _touchPhysics = CharacterTouchPhysicsRig();
   CharacterExpression _currentExpression = CharacterExpression.neutral;
   CharacterFacialDetail? _activeFacialDetail;
   CharacterResourceBehavior _resourceBehavior = CharacterResourceBehavior.parse(
@@ -635,6 +639,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _activeCharacterId = widget.controller.activeCharacterId;
     _appearance = characterAppearanceById(
       widget.controller.selectedCharacterAppearanceId,
@@ -685,7 +690,12 @@ class _ChatScreenState extends State<ChatScreen> {
           widget.controller.frameRate.effectiveFramesPerSecond,
       onBeforeUpdateWorldTransforms: _restoreProceduralRig,
       onBeforeApplyAnimation: _prepareSpeechFrame,
-      onAfterApplyAnimation: _applySpeakingHeadMotion,
+      onAfterApplyAnimation: (controller) {
+        _applySpeakingHeadMotion(controller);
+        _touchPhysics.apply(controller.updateDelta);
+      },
+      onAfterUpdateWorldTransforms: (controller) =>
+          _facePull.apply(controller.updateDelta),
       maxDeltaTime: 0.05,
       paintOverflow: const EdgeInsets.only(top: 160),
       onInitialized: (controller) {
@@ -693,6 +703,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // A skin may also be replaced before this frame has finished.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || !identical(spineController, _spineController)) return;
+          unawaited(_touchPhysics.prepare(controller.drawable));
           controller.animationState.getData().setDefaultMix(0.38);
           _currentIdleAnimation = appearance.idleAnimations.first;
           controller.animationState.setAnimationByName(
@@ -725,6 +736,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _syncCharacterAnimationPause() {
     if (widget.pauseCharacterAnimation || !_usesProtectedSpine) {
+      _cancelFacePull();
       _spineController?.pause();
       _seatObjectController.pause();
       _idleTimer?.cancel();
@@ -779,6 +791,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _clearPerformanceQueue();
     _lipSyncEntry = null;
+    _cancelFacePull();
     _gazeHeld = false;
     _gazePointer = null;
     _gazeStartedAt = null;
@@ -840,6 +853,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _resetConversationWorkForDataReplacement() {
+    _cancelFacePull();
     _contactFollowUp = null;
     _recentDialogueActions.clear();
     _recentAmbientGroupIds.clear();
@@ -1968,6 +1982,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _restoreProceduralRig(SpineWidgetController controller) {
+    _facePull.restore();
     if (identical(_cachedRigSkeleton, controller.skeleton)) {
       for (final entry in _rigBase.entries) {
         _rigBones[entry.key]
@@ -2264,6 +2279,120 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _gazeHeld = true;
     _gazeStartedAt = DateTime.now();
+  }
+
+  bool _beginFacePull(Offset position) {
+    final controller = _spineController;
+    if (!widget.pageActive ||
+        !_spineReady ||
+        controller == null ||
+        !controller.isPlaying ||
+        widget.pauseCharacterAnimation ||
+        _tapReactionActive ||
+        !_facePull.begin(
+          controller.skeleton,
+          controller.toSkeletonCoordinates(position),
+        )) {
+      return false;
+    }
+    _endGaze();
+    widget.controller.frameRate.setActivity(FrameRateActivity.touch, true);
+    return true;
+  }
+
+  void _updateFacePull(Offset position) {
+    final controller = _spineController;
+    if (!widget.pageActive || widget.pauseCharacterAnimation) {
+      _cancelFacePull();
+      return;
+    }
+    if (!_facePull.isDragging || controller == null) return;
+    _facePull.drag(controller.toSkeletonCoordinates(position));
+  }
+
+  void _endFacePull() {
+    widget.controller.frameRate.setActivity(
+      FrameRateActivity.touch,
+      _touchPhysics.isTouching,
+    );
+    if (!_facePull.active) return;
+    _facePull.release();
+    widget.controller.frameRate.boost(
+      FrameRateActivity.touch,
+      duration: const Duration(milliseconds: 700),
+    );
+  }
+
+  void _cancelFacePull() {
+    _facePull.reset();
+    _touchPhysics.reset();
+    widget.controller.frameRate.setActivity(FrameRateActivity.touch, false);
+  }
+
+  void _beginTouchPhysics(CharacterTouchSample sample) {
+    final controller = _spineController;
+    if (!widget.pageActive ||
+        widget.pauseCharacterAnimation ||
+        !_spineReady ||
+        controller == null ||
+        !controller.isPlaying) {
+      return;
+    }
+    if (_touchPhysics.begin(
+      controller.skeleton,
+      controller.toSkeletonCoordinates(sample.position),
+    )) {
+      widget.controller.frameRate.setActivity(FrameRateActivity.touch, true);
+    }
+  }
+
+  void _moveTouchPhysics(CharacterTouchSample sample) {
+    final controller = _spineController;
+    if (!widget.pageActive ||
+        widget.pauseCharacterAnimation ||
+        controller == null) {
+      return;
+    }
+    if (!_touchPhysics.isTouching) return;
+    final point = controller.toSkeletonCoordinates(sample.position);
+    // Convert the normalized screen direction through the fitted Spine view,
+    // retaining magnitude while accounting for its Y direction and transform.
+    final origin = controller.toSkeletonCoordinates(Offset.zero);
+    final xAxis = controller.toSkeletonCoordinates(const Offset(1, 0)) - origin;
+    final yAxis = controller.toSkeletonCoordinates(const Offset(0, 1)) - origin;
+    final direction = xAxis * sample.velocity.dx + yAxis * sample.velocity.dy;
+    final speed = sample.velocity.distance;
+    final velocity = direction.distance > 1e-9
+        ? direction / direction.distance * speed
+        : Offset.zero;
+    _touchPhysics.move(point, velocity);
+    widget.controller.frameRate.setActivity(
+      FrameRateActivity.touch,
+      _facePull.isDragging || _touchPhysics.active,
+    );
+  }
+
+  void _endTouchPhysics() {
+    final hadPhysics = _touchPhysics.active;
+    _touchPhysics.release();
+    widget.controller.frameRate.setActivity(
+      FrameRateActivity.touch,
+      _facePull.isDragging,
+    );
+    if (hadPhysics &&
+        widget.pageActive &&
+        !widget.pauseCharacterAnimation &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      widget.controller.frameRate.boost(
+        FrameRateActivity.touch,
+        duration: const Duration(milliseconds: 1800),
+      );
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _cancelFacePull();
   }
 
   void _endGaze() {
@@ -2916,6 +3045,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // The child drawable may already be freed; do not touch native pointers.
+    _facePull.reset(restorePose: false);
+    _touchPhysics.reset(resetNative: false);
+    widget.controller.frameRate.setActivity(FrameRateActivity.touch, false);
     _clearPerformanceQueue();
     _outfitReactionTimer?.cancel();
     _replyGeneration += 1;
@@ -2975,6 +3109,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (reaction == null) {
       return;
     }
+    _facePull.reset();
     _clearPerformanceQueue();
     widget.controller.recordCharacterTouch();
     var restoreDelay = const Duration(milliseconds: 350);
@@ -5033,6 +5168,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _syncCharacterAnimationPause();
     }
     if (oldWidget.pageActive != widget.pageActive) {
+      if (!widget.pageActive) _cancelFacePull();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _syncBackgroundVoicePolicy();
       });
@@ -6584,6 +6720,18 @@ class _ChatScreenState extends State<ChatScreen> {
           CharacterCamera(
             keepSceneProportions: true,
             onTap: _reactToTap,
+            onCharacterDragStart: _appearance.animated ? _beginFacePull : null,
+            onCharacterDragUpdate: _appearance.animated
+                ? _updateFacePull
+                : null,
+            onCharacterDragEnd: _endFacePull,
+            onCharacterTouchStart: _appearance.animated
+                ? _beginTouchPhysics
+                : null,
+            onCharacterTouchMove: _appearance.animated
+                ? _moveTouchPhysics
+                : null,
+            onCharacterTouchEnd: _endTouchPhysics,
             onGazeChanged: widget.controller.gazeTrackingEnabled
                 ? _updateGaze
                 : null,

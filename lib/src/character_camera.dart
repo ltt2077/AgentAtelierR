@@ -1,11 +1,33 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ViewFocusEvent, ViewFocusState;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 const characterCameraGestureKey = ValueKey('character-stage-gesture');
 const characterCameraTransformKey = ValueKey('character-camera-transform');
 const characterCameraOffsetKey = ValueKey('character-camera-offset');
+
+/// A single pointer sample in the character's unscaled scene coordinates.
+@immutable
+class CharacterTouchSample {
+  const CharacterTouchSample({
+    required this.position,
+    required this.timeStamp,
+    required this.velocity,
+  });
+
+  /// The same coordinate system used by [CharacterCamera.onTap].
+  final Offset position;
+
+  /// Pointer event time, independent of wall-clock changes and render timing.
+  final Duration timeStamp;
+
+  /// Scene widths/heights per second, with camera and scene fitting removed.
+  /// A value of (1, 0) moves one whole scene width per second to the right.
+  final Offset velocity;
+}
 
 class CharacterCamera extends StatefulWidget {
   const CharacterCamera({
@@ -14,6 +36,12 @@ class CharacterCamera extends StatefulWidget {
     required this.onTap,
     this.onGazeChanged,
     this.onGazeEnd,
+    this.onCharacterDragStart,
+    this.onCharacterDragUpdate,
+    this.onCharacterDragEnd,
+    this.onCharacterTouchStart,
+    this.onCharacterTouchMove,
+    this.onCharacterTouchEnd,
     this.minScale = 0.8,
     this.maxScale = 2.2,
     this.initialScale = 1.25,
@@ -25,6 +53,20 @@ class CharacterCamera extends StatefulWidget {
   final ValueChanged<Offset> onTap;
   final ValueChanged<Offset>? onGazeChanged;
   final VoidCallback? onGazeEnd;
+
+  /// Called after the pointer crosses the drag slop. Return true only when the
+  /// original press hit a draggable character region. All positions use the
+  /// same scene coordinates as [onTap].
+  final bool Function(Offset)? onCharacterDragStart;
+  final ValueChanged<Offset>? onCharacterDragUpdate;
+  final VoidCallback? onCharacterDragEnd;
+
+  /// Independent single-pointer input for physics, including sub-slop motion
+  /// and motion captured by [onCharacterDragStart]. Both start and move must
+  /// be supplied to enable sampling. These callbacks do not consume gestures.
+  final ValueChanged<CharacterTouchSample>? onCharacterTouchStart;
+  final ValueChanged<CharacterTouchSample>? onCharacterTouchMove;
+  final VoidCallback? onCharacterTouchEnd;
   final double minScale;
   final double maxScale;
   final double initialScale;
@@ -45,6 +87,16 @@ class _CharacterCameraState extends State<CharacterCamera>
   bool _suppressTap = false;
   Timer? _tapSuppressionTimer;
   final Set<int> _pointers = {};
+  int? _characterDragPointer;
+  Offset? _characterDragOrigin;
+  bool _characterDragging = false;
+  bool _characterDragRejected = false;
+  bool _characterDragSuppressTap = false;
+  VoidCallback? _activeCharacterDragEnd;
+  int? _characterTouchPointer;
+  Offset? _previousTouchPosition;
+  Duration? _previousTouchTime;
+  VoidCallback? _activeCharacterTouchEnd;
 
   @override
   void initState() {
@@ -57,15 +109,133 @@ class _CharacterCameraState extends State<CharacterCamera>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _tapSuppressionTimer?.cancel();
+    _endCharacterDrag();
+    _endCharacterTouch();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant CharacterCamera oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.onCharacterDragStart == null ||
+        widget.onCharacterDragUpdate == null) {
+      _endCharacterDrag();
+    }
+    if (widget.onCharacterTouchStart == null ||
+        widget.onCharacterTouchMove == null) {
+      _endCharacterTouch();
+    }
+  }
+
+  void _endCharacterTouch() {
+    final end = _characterTouchPointer != null
+        ? _activeCharacterTouchEnd
+        : null;
+    _characterTouchPointer = null;
+    _previousTouchPosition = null;
+    _previousTouchTime = null;
+    _activeCharacterTouchEnd = null;
+    end?.call();
+  }
+
+  CharacterTouchSample _touchSample(
+    PointerEvent event,
+    Size stageSize,
+    double verticalOffset,
+  ) {
+    final position = _unscalePosition(
+      event.localPosition,
+      stageSize,
+      verticalOffset,
+    );
+    final previousPosition = _previousTouchPosition;
+    final previousTime = _previousTouchTime;
+    final elapsed = previousTime == null
+        ? 0
+        : (event.timeStamp - previousTime).inMicroseconds;
+    final sceneSize = widget.keepSceneProportions
+        ? (_referenceSceneSize ?? stageSize)
+        : stageSize;
+    var velocity = Offset.zero;
+    // A long press or an interrupted event stream establishes a fresh speed
+    // baseline instead of treating accumulated movement as a sudden flick.
+    if (previousPosition != null &&
+        elapsed > 0 &&
+        elapsed <= 100000 &&
+        sceneSize.width > 0 &&
+        sceneSize.height > 0) {
+      final delta = position - previousPosition;
+      final seconds = elapsed / Duration.microsecondsPerSecond;
+      velocity = Offset(
+        delta.dx / sceneSize.width / seconds,
+        delta.dy / sceneSize.height / seconds,
+      );
+    }
+    _previousTouchPosition = position;
+    _previousTouchTime = event.timeStamp;
+    return CharacterTouchSample(
+      position: position,
+      timeStamp: event.timeStamp,
+      velocity: velocity,
+    );
+  }
+
+  void _endCharacterDrag() {
+    final end = _characterDragging ? _activeCharacterDragEnd : null;
+    _characterDragging = false;
+    _activeCharacterDragEnd = null;
+    _characterDragPointer = null;
+    _characterDragOrigin = null;
+    _characterDragRejected = false;
+    end?.call();
+  }
+
+  void _resetPointers() {
+    final suppressTap = _pinchDetected || _pointers.length > 1 || _suppressTap;
+    _endCharacterDrag();
+    _endCharacterTouch();
+    _pointers.clear();
+    _pinchDetected = false;
+    // ScaleEnd may arrive after focus/lifecycle reset and no longer carry the
+    // pinch flag. Own the short suppression window here so it cannot stick.
+    if (suppressTap) _suppressTapsBriefly();
+    widget.onGazeEnd?.call();
+  }
+
+  void _suppressTapsBriefly() {
+    _suppressTap = true;
+    _tapSuppressionTimer?.cancel();
+    _tapSuppressionTimer = Timer(
+      const Duration(milliseconds: 280),
+      () => _suppressTap = false,
+    );
+  }
+
+  void _removePointer(int pointer) {
+    if (pointer == _characterDragPointer) _endCharacterDrag();
+    if (pointer == _characterTouchPointer) _endCharacterTouch();
+    _pointers.remove(pointer);
+    if (_pointers.isEmpty && _pinchDetected) {
+      // A two-finger tap need not win the scale gesture arena, so there may be
+      // no ScaleEnd callback to clear its flag or suppress the trailing tap.
+      _pinchDetected = false;
+      _suppressTapsBriefly();
+    }
+    widget.onGazeEnd?.call();
+  }
+
+  @override
+  void didChangeViewFocus(ViewFocusEvent event) {
+    if (event.state == ViewFocusState.unfocused &&
+        event.viewId == View.of(context).viewId) {
+      _resetPointers();
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) {
-      _pointers.clear();
-      _pinchDetected = false;
-      widget.onGazeEnd?.call();
+      _resetPointers();
     }
   }
 
@@ -87,6 +257,28 @@ class _CharacterCameraState extends State<CharacterCamera>
             onPointerDown: (event) {
               _pointers.add(event.pointer);
               if (_pointers.length == 1) {
+                _pinchDetected = false;
+                _characterDragSuppressTap = false;
+                if ((event.kind == PointerDeviceKind.touch ||
+                        event.kind == PointerDeviceKind.mouse) &&
+                    event.buttons == kPrimaryButton &&
+                    widget.onCharacterTouchStart != null &&
+                    widget.onCharacterTouchMove != null) {
+                  _characterTouchPointer = event.pointer;
+                  _activeCharacterTouchEnd = widget.onCharacterTouchEnd;
+                  widget.onCharacterTouchStart!.call(
+                    _touchSample(event, constraints.biggest, verticalOffset),
+                  );
+                }
+                if ((event.kind == PointerDeviceKind.touch ||
+                        event.kind == PointerDeviceKind.mouse) &&
+                    event.buttons == kPrimaryButton &&
+                    widget.onCharacterDragStart != null &&
+                    widget.onCharacterDragUpdate != null &&
+                    !_suppressTap) {
+                  _characterDragPointer = event.pointer;
+                  _characterDragOrigin = event.localPosition;
+                }
                 widget.onGazeChanged?.call(
                   _unscalePosition(
                     event.localPosition,
@@ -95,10 +287,63 @@ class _CharacterCameraState extends State<CharacterCamera>
                   ),
                 );
               } else {
+                _endCharacterDrag();
+                _endCharacterTouch();
+                _pinchDetected = true;
                 widget.onGazeEnd?.call();
               }
             },
             onPointerMove: (event) {
+              if (event.pointer == _characterTouchPointer) {
+                if (event.buttons != kPrimaryButton) {
+                  _endCharacterTouch();
+                } else if (_pointers.length == 1 && !_pinchDetected) {
+                  widget.onCharacterTouchMove?.call(
+                    _touchSample(event, constraints.biggest, verticalOffset),
+                  );
+                }
+              }
+              if (event.pointer == _characterDragPointer) {
+                if (event.buttons != kPrimaryButton) {
+                  _endCharacterDrag();
+                } else if (_pointers.length == 1 && !_pinchDetected) {
+                  final origin = _characterDragOrigin;
+                  if (!_characterDragging &&
+                      !_characterDragRejected &&
+                      origin != null &&
+                      (event.localPosition - origin).distance >
+                          computeHitSlop(
+                            event.kind,
+                            MediaQuery.maybeGestureSettingsOf(context),
+                          )) {
+                    _characterDragging =
+                        widget.onCharacterDragStart?.call(
+                          _unscalePosition(
+                            origin,
+                            constraints.biggest,
+                            verticalOffset,
+                          ),
+                        ) ??
+                        false;
+                    _characterDragRejected = !_characterDragging;
+                    if (_characterDragging) {
+                      _activeCharacterDragEnd = widget.onCharacterDragEnd;
+                      _characterDragSuppressTap = true;
+                      widget.onGazeEnd?.call();
+                    }
+                  }
+                  if (_characterDragging) {
+                    widget.onCharacterDragUpdate?.call(
+                      _unscalePosition(
+                        event.localPosition,
+                        constraints.biggest,
+                        verticalOffset,
+                      ),
+                    );
+                    return;
+                  }
+                }
+              }
               if (_pointers.length == 1 && !_pinchDetected && !_suppressTap) {
                 widget.onGazeChanged?.call(
                   _unscalePosition(
@@ -110,18 +355,20 @@ class _CharacterCameraState extends State<CharacterCamera>
               }
             },
             onPointerUp: (event) {
-              _pointers.remove(event.pointer);
-              widget.onGazeEnd?.call();
+              _removePointer(event.pointer);
             },
             onPointerCancel: (event) {
-              _pointers.remove(event.pointer);
-              widget.onGazeEnd?.call();
+              _removePointer(event.pointer);
             },
             child: GestureDetector(
               key: characterCameraGestureKey,
               behavior: HitTestBehavior.opaque,
               onTapUp: (details) {
-                if (_pinchDetected || _suppressTap) return;
+                if (_pinchDetected ||
+                    _suppressTap ||
+                    _characterDragSuppressTap) {
+                  return;
+                }
                 widget.onTap(
                   _unscalePosition(
                     details.localPosition,
@@ -161,13 +408,7 @@ class _CharacterCameraState extends State<CharacterCamera>
                 });
               },
               onScaleEnd: (_) {
-                if (_pinchDetected) {
-                  _tapSuppressionTimer?.cancel();
-                  _tapSuppressionTimer = Timer(
-                    const Duration(milliseconds: 280),
-                    () => _suppressTap = false,
-                  );
-                }
+                if (_pinchDetected) _suppressTapsBriefly();
                 _pinchDetected = false;
               },
               child: Transform.translate(
