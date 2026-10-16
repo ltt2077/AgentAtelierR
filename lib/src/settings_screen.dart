@@ -2187,15 +2187,12 @@ class SettingsScreenState extends State<SettingsScreen> {
             String describeField(String? name, String kind) {
               if (selectedTool == null) {
                 return kind == '模型'
-                    ? '所选模型直接发送至云端，由服务判断可用性。'
+                    ? '连接并探测工具后显示可用的 MCP 生成路径。'
                     : '音色标识可直接填写，留空时使用服务默认音色。';
               }
               if (name == null) {
                 if (kind == '模型') {
-                  return selectedTool.inputSchema['additionalProperties'] ==
-                          false
-                      ? '当前工具没有模型字段，且声明不接受额外参数。仍会提交所选模型，但云端可能忽略或拒绝，无法保证切换。'
-                      : '当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。';
+                  return '当前 text_to_speech 未声明模型字段；选择明确模型时需要 Studio MCP 工具。';
                 }
                 return '音色标识可直接填写，由云端服务处理。';
               }
@@ -2207,6 +2204,30 @@ class SettingsScreenState extends State<SettingsScreen> {
             }
 
             final modelField = fieldName(['model', 'model_id', 'modelId']);
+            final generationRoute = service.generationRouteForModel(model);
+            final generationRouteLabel = switch (generationRoute) {
+              'studio' => 'Studio MCP（项目后端配置）',
+              'text_to_speech' => 'text_to_speech',
+              _ => '暂不可用',
+            };
+            final studioUnavailableDetails = [
+              if (service.missingStudioTools.isNotEmpty)
+                '缺少 Studio MCP 工具：${service.missingStudioTools.join('、')}',
+              if (service.studioContractIssues.isNotEmpty)
+                'Studio MCP 参数不兼容：${service.studioContractIssues.join('；')}',
+            ].join('；');
+            final modelDescription = switch (generationRoute) {
+              'studio' => '通过 Studio MCP 将所选模型写入项目的 default_backend，并核对云端项目配置。配置确认不等于验证实际推理模型。',
+              'text_to_speech' when model.trim().isEmpty =>
+                '服务默认使用 text_to_speech，不指定模型。',
+              'text_to_speech' => describeField(modelField, '模型'),
+              _ when service.lastDiscoveryAt == null =>
+                '连接并探测工具后显示可用的 MCP 生成路径。',
+              _ when model.trim().isEmpty =>
+                '当前连接未发现 text_to_speech，服务默认路径不可用；可选择明确模型使用完整的 Studio MCP 工具。',
+              _ =>
+                '当前工具未声明模型字段，且$studioUnavailableDetails。此情况保留 MCP 错误，不启用 REST 回退。',
+            };
             final voiceField = fieldName([
               'voice',
               'voice_id',
@@ -2226,6 +2247,7 @@ class SettingsScreenState extends State<SettingsScreen> {
               'pending' => '请求中，等待云端返回',
               'request_failed' => '请求失败，未确认本次模型选择',
               'server_default' => '请求使用服务默认模型',
+              'studio_configured' => 'Studio 项目已确认后端配置，实际推理模型未返回',
               'unreported' => '云端未返回模型标识，无法确认已切换',
               'match' => '云端返回模型与最近请求一致',
               'mismatch' => '云端返回模型与最近请求不同',
@@ -2329,9 +2351,20 @@ class SettingsScreenState extends State<SettingsScreen> {
                         },
                       ),
                       Text(
-                        describeField(modelField, '模型'),
+                        '生成路径：$generationRouteLabel',
+                        key: const ValueKey('fish-mcp-generation-route'),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
+                      Text(
+                        modelDescription,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (generationRoute == 'studio')
+                        Text(
+                          'Studio MCP 会在 Fish Audio 云端项目保存台词、音色配置及生成音频；普通对话和 ASMR 均使用对应的已配置音色。',
+                          key: const ValueKey('fish-mcp-studio-cloud-notice'),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       Text(
                         '当前选择仅为草稿，点击“保存并使用 MCP”后下次请求才生效；返回或取消不会保存。',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -2351,6 +2384,14 @@ class SettingsScreenState extends State<SettingsScreen> {
                         key: const ValueKey('fish-mcp-last-reported-model'),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
+                      if (service.lastConfiguredBackend != null)
+                        SelectableText(
+                          'Studio 已确认后端配置：${service.lastConfiguredBackend}（项目配置证据）',
+                          key: const ValueKey(
+                            'fish-mcp-last-configured-backend',
+                          ),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       Text(
                         '最近调用状态：$modelSelectionStatus',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -2366,7 +2407,7 @@ class SettingsScreenState extends State<SettingsScreen> {
                             setDialogState(() => autoFallback = value),
                         title: const Text('MCP 失败时允许回退现有 Fish API'),
                         subtitle: const Text(
-                          '默认关闭。仅在 MCP 未提交生成且本地准备失败时回退。使用现有 Fish API Key 和音色；已选模型保持不变，服务默认时使用 API 模型配置。可能消耗独立的开发者 API 余额。OAuth 凭据不导出到普通备份。',
+                          '默认关闭。仅在 MCP 未提交生成且本地准备失败时回退；缺少 Studio 工具或 Studio 流程失败不回退。使用现有 Fish API Key 和音色；已选模型保持不变，服务默认时使用 API 模型配置。可能消耗独立的开发者 API 余额。OAuth 凭据不导出到普通备份。',
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -2457,9 +2498,9 @@ class SettingsScreenState extends State<SettingsScreen> {
                       ],
                       if (service.lastDiscoveryAt != null)
                         Text(
-                          service.drama3Supported
-                              ? 'Drama 3：当前 TTS 工具的模型 schema 声明支持；实际权益与生成能力仍由服务端校验。'
-                              : 'Drama 3：当前工具未声明支持，选择并提交不代表云端已切换。',
+                          service.studioAvailable
+                              ? 'Studio MCP：所需工具齐全，可使用项目 default_backend 配置明确模型。'
+                              : 'Studio MCP：$studioUnavailableDetails。',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       const SizedBox(height: 8),

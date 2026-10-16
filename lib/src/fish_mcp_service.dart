@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'ai_services.dart' show detectAudioContainerExtension;
 import 'fish_mcp_protocol.dart';
+import 'fish_mcp_studio.dart';
 import 'runtime_log.dart';
 
 export 'fish_mcp_protocol.dart' show FishMcpException;
@@ -91,12 +92,14 @@ class FishMcpService extends ChangeNotifier {
   Map<String, dynamic>? _lastResultSummary;
   String? _lastRequestedModel;
   String? _lastReportedModel;
+  String? _lastConfiguredBackend;
   String _modelSelectionStatus = 'no_request';
   int _modelRequestSerial = 0;
 
   /// Null means no tools/call; empty means the submitted service default.
   String? get lastRequestedModel => _lastRequestedModel;
   String? get lastReportedModel => _lastReportedModel;
+  String? get lastConfiguredBackend => _lastConfiguredBackend;
   String get modelSelectionStatus => _modelSelectionStatus;
 
   final http.Client _downloadClient;
@@ -105,6 +108,7 @@ class FishMcpService extends ChangeNotifier {
   int _connectionGeneration = 0;
 
   McpClient? _client;
+  FishMcpStudioSession? _studioSession;
   _FishMcpPendingAuthorization? _pendingAuthorization;
   bool _disposed = false;
 
@@ -122,7 +126,84 @@ class FishMcpService extends ChangeNotifier {
   }
 
   bool get isReady =>
-      state == FishMcpConnectionState.toolsDiscovered && ttsToolName != null;
+      state == FishMcpConnectionState.toolsDiscovered &&
+      (ttsToolName != null || studioAvailable);
+
+  List<String> get missingStudioTools => [
+    for (final name in fishMcpStudioTools)
+      if (!tools.any((tool) => tool.name == name)) name,
+  ];
+
+  List<String> get studioContractIssues {
+    const fields = <String, List<String>>{
+      'studio_create_project': [
+        'name',
+        'roster',
+        'default_voice_id',
+        'chapters',
+      ],
+      'studio_update_project': [
+        'project_id',
+        'default_backend',
+        'scene_preset',
+      ],
+      'studio_project': ['project_id'],
+      'studio_write_blocks': ['project_id', 'ops'],
+      'studio_generate': ['project_id', 'blocks', 'dry_run'],
+    };
+    final issues = <String>[];
+    for (final entry in fields.entries) {
+      final tool = tools.where((tool) => tool.name == entry.key).firstOrNull;
+      if (tool == null) continue;
+      final properties = fishMcpSchemaProperties(tool.inputSchema);
+      for (final field in entry.value) {
+        if (!properties.containsKey(field)) {
+          issues.add('${entry.key} 未声明字段 $field');
+        }
+      }
+      if (entry.key == 'studio_generate' && properties.containsKey('dry_run')) {
+        final definition = properties['dry_run'];
+        final type = definition is Map ? definition['type'] : null;
+        if (type != 'boolean' && !(type is List && type.contains('boolean'))) {
+          issues.add('studio_generate.dry_run 未声明为 boolean');
+        }
+      }
+    }
+    return issues;
+  }
+
+  bool get studioAvailable =>
+      missingStudioTools.isEmpty && studioContractIssues.isEmpty;
+
+  bool get studioReadBlocksAvailable {
+    final tool = tools
+        .where((tool) => tool.name == 'studio_read_blocks')
+        .firstOrNull;
+    if (tool == null) return false;
+    final properties = fishMcpSchemaProperties(tool.inputSchema);
+    for (final field in const ['project_id', 'chapter']) {
+      final definition = properties[field];
+      if (definition is! Map || definition['type'] != 'string') return false;
+    }
+    final required = tool.inputSchema['required'];
+    if (required != null && required is! List) return false;
+    return fishMcpSchemaRequiredFields(tool.inputSchema)
+        .every((field) => const ['project_id', 'chapter'].contains(field));
+  }
+
+  String generationRouteForModel(String? model) {
+    if (model?.trim().isNotEmpty == true) {
+      if (studioAvailable) return 'studio';
+      final tool = selectedTtsTool;
+      final properties = tool == null
+          ? const <String, dynamic>{}
+          : fishMcpSchemaProperties(tool.inputSchema);
+      if (!const ['model', 'model_id', 'modelId'].any(properties.containsKey)) {
+        return 'unavailable';
+      }
+    }
+    return selectedTtsTool == null ? 'unavailable' : 'text_to_speech';
+  }
 
   FishMcpToolInfo? get selectedTtsTool {
     for (final tool in tools) {
@@ -138,9 +219,15 @@ class FishMcpService extends ChangeNotifier {
       'tts_tool': ttsToolName,
       'discovered_at': lastDiscoveryAt?.toIso8601String(),
       'drama3_listed_in_schema': drama3Supported,
+      'studio_available': studioAvailable,
+      'studio_read_blocks_available': studioReadBlocksAvailable,
+      'missing_studio_tools': missingStudioTools,
+      'studio_contract_issues': studioContractIssues,
       'local_input_schema_validation': false,
+      'studio_contract_validation': true,
       'requested_model': lastRequestedModel,
       'reported_model': lastReportedModel,
+      'configured_backend': lastConfiguredBackend,
       'model_selection_status': modelSelectionStatus,
       'tools': tools.map((tool) => tool.toJson()).toList(),
       'last_request': _lastRequestSummary,
@@ -352,7 +439,9 @@ class FishMcpService extends ChangeNotifier {
       ttsToolName = selected?.name;
       drama3Supported = _detectDrama3ForSelectedTool();
       lastDiscoveryAt = DateTime.now();
-      errorMessage = ttsToolName == null ? '工具列表中没有可识别的 TTS 生成工具。' : null;
+      errorMessage = ttsToolName == null && !studioAvailable
+          ? '工具列表中没有可识别的 TTS 或完整 Studio 生成工具。'
+          : null;
       lastError = null;
       _setState(FishMcpConnectionState.toolsDiscovered);
       RuntimeLog.instance.info(
@@ -470,62 +559,104 @@ class FishMcpService extends ChangeNotifier {
     String language = 'ja',
     String format = 'mp3',
     double speed = 1.0,
+    bool Function()? isCurrent,
   }) async {
     var stage = 'preflight';
     var submitted = false;
     final generation = _connectionGeneration;
     var requestSerial = 0;
     final requestedModel = fishMcpModelDiagnosticLabel(model ?? '');
+    void ensureRequestCurrent(McpClient client) {
+      _ensureCurrent(generation, client);
+      if (isCurrent != null && !isCurrent()) {
+        throw FishMcpException(
+          stage: 'cancelled',
+          code: 'request_cancelled',
+          message: '语音请求已取消，已停止后续操作；不会重新生成或回退。',
+        );
+      }
+    }
+
     try {
       final client = _client;
       final tool = selectedTtsTool;
-      if (!isReady || client == null || tool == null) {
+      if (!isReady || client == null) {
         throw FishMcpException(
           stage: stage,
           code: 'not_ready',
           message: 'Fish MCP 尚未完成 tools/list，请先在语音设置连接并读取工具。',
         );
       }
+      ensureRequestCurrent(client);
+      final route = generationRouteForModel(model);
+      if (route == 'unavailable') {
+        final issues = [
+          ...missingStudioTools,
+          ...studioContractIssues,
+        ].join('；');
+        throw FishMcpException(
+          stage: 'studio_preflight',
+          code: 'studio_tools_unavailable',
+          message:
+              '所选模型需要兼容的 Studio MCP 工具：$issues。请重新读取 tools/list；不会向普通 TTS 发送未声明的 model，也不会回退 REST。',
+        );
+      }
+      final useStudio = route == 'studio';
+      final generationTool = useStudio ? 'studio_generate' : tool!.name;
       stage = 'parameters';
       final omitted = <String, String>{};
-      final arguments = buildFishMcpTtsArguments(
-        tool: FishMcpToolDefinition(
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        ),
-        text: text,
-        voice: voice,
-        model: model,
-        language: language,
-        format: format,
-        speed: speed,
-        onOmittedOptionalField: (field, explanation) {
-          omitted[field] = explanation;
-        },
-      );
+      final arguments = useStudio
+          ? const <String, dynamic>{}
+          : buildFishMcpTtsArguments(
+              tool: FishMcpToolDefinition(
+                name: tool!.name,
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+              ),
+              text: text,
+              voice: voice,
+              model: model,
+              language: language,
+              format: format,
+              speed: speed,
+              onOmittedOptionalField: (field, explanation) {
+                omitted[field] = explanation;
+              },
+            );
       requestSerial = ++_modelRequestSerial;
       _lastRequestedModel = requestedModel;
       _lastReportedModel = null;
+      _lastConfiguredBackend = null;
       _modelSelectionStatus = 'pending';
       lastGenerationLatency = null;
-      final properties = fishMcpSchemaProperties(tool.inputSchema);
-      final modelField = const [
-        'model',
-        'model_id',
-        'modelId',
-      ].where(arguments.containsKey).firstOrNull;
+      final modelSchema = useStudio
+          ? tools
+                .firstWhere((tool) => tool.name == 'studio_update_project')
+                .inputSchema
+          : tool!.inputSchema;
+      final properties = fishMcpSchemaProperties(modelSchema);
+      final modelField = useStudio
+          ? 'default_backend'
+          : const [
+              'model',
+              'model_id',
+              'modelId',
+            ].where(arguments.containsKey).firstOrNull;
       final modelDeclared =
           modelField != null && properties.containsKey(modelField);
       _lastRequestSummary = {
-        'tool': tool.name,
-        'argument_names': arguments.keys.toList(),
+        'route': route,
+        'tool': generationTool,
+        'argument_names': useStudio
+            ? ['project_id', 'blocks']
+            : arguments.keys.toList(),
         'text_utf8_bytes': utf8.encode(text).length,
         'requested_model': requestedModel,
         'model_argument': ?modelField,
         'model_declared_in_schema': modelDeclared,
         'schema_rejects_extra_arguments':
-            tool.inputSchema['additionalProperties'] == false,
+            modelSchema['additionalProperties'] == false,
+        'model_extension_override': false,
         if (omitted.isNotEmpty) 'omitted_optional_fields': omitted,
         'model_sent':
             arguments.containsKey('model') ||
@@ -533,32 +664,68 @@ class FishMcpService extends ChangeNotifier {
             arguments.containsKey('modelId'),
       };
       _lastResultSummary = null;
-      if (modelField != null && !modelDeclared) {
-        RuntimeLog.instance.warning(
-          'Fish MCP',
-          '工具 ${tool.name} 未声明模型参数；仍提交 '
-              '$modelField=$requestedModel，云端是否采用未确认。',
-        );
-      }
       lastError = null;
       errorMessage = null;
-      stage = 'transport';
-      submitted = true;
+      stage = useStudio ? 'studio_prepare' : 'transport';
       final timer = Stopwatch()..start();
       late final CallToolResult result;
+      String? configuredBackend;
       try {
         // A generation request is submitted only once. A transport timeout
         // cannot establish whether the server already consumed credits.
-        result = await client.callTool(
-          CallToolRequest(name: tool.name, arguments: arguments),
-          options: RequestOptions(timeout: const Duration(seconds: 90)),
-        );
+        if (useStudio) {
+          final session = _studioSession ??= FishMcpStudioSession(
+            client: client,
+            ensureCurrent: () => _ensureCurrent(generation, client),
+            readBlocksAvailable: studioReadBlocksAvailable,
+          );
+          result = await session.generate(
+            text: text,
+            voice: voice?.trim() ?? '',
+            model: model!.trim(),
+            ensureRequestCurrent: () => ensureRequestCurrent(client),
+            onSubmitted: () {
+              submitted = true;
+              stage = 'studio_generate';
+            },
+            onConfigured: (backend) {
+              configuredBackend = backend;
+              if (requestSerial == _modelRequestSerial &&
+                  _isCurrent(generation)) {
+                _lastConfiguredBackend = fishMcpModelDiagnosticLabel(backend);
+                _lastRequestSummary?['model_sent'] = true;
+              }
+            },
+            onSummary: (summary) {
+              if (requestSerial == _modelRequestSerial &&
+                  _isCurrent(generation)) {
+                _lastRequestSummary?.addAll(summary);
+                if (summary.keys.any(
+                  (key) =>
+                      key.startsWith('studio_result_') ||
+                      key.startsWith('studio_read_'),
+                )) {
+                  RuntimeLog.instance.info(
+                    'Fish MCP',
+                    'Studio 结果状态：${jsonEncode(summary)}',
+                  );
+                }
+              }
+            },
+          );
+        } else {
+          submitted = true;
+          result = await client.callTool(
+            CallToolRequest(name: generationTool, arguments: arguments),
+            options: RequestOptions(timeout: const Duration(seconds: 90)),
+          );
+        }
       } finally {
         if (requestSerial == _modelRequestSerial && _isCurrent(generation)) {
           lastGenerationLatency = timer.elapsed;
         }
       }
-      _ensureCurrent(generation, client);
+      ensureRequestCurrent(client);
       final structured = result.structuredContentJson?.toJson();
       final reportedModel = fishMcpReportedModel(result);
       final modelStatus = result.isError
@@ -566,7 +733,9 @@ class FishMcpService extends ChangeNotifier {
           : requestedModel.isEmpty
           ? 'server_default'
           : reportedModel == null
-          ? 'unreported'
+          ? configuredBackend == null
+                ? 'unreported'
+                : 'studio_configured'
           : requestedModel == reportedModel
           ? 'match'
           : 'mismatch';
@@ -579,6 +748,10 @@ class FishMcpService extends ChangeNotifier {
           'structured_type': structured.runtimeType.toString(),
           if (structured is Map) 'structured_keys': structured.keys.toList(),
           'reported_model': reportedModel,
+          if (configuredBackend != null)
+            'configured_backend': fishMcpModelDiagnosticLabel(
+              configuredBackend!,
+            ),
           'model_selection_status': modelStatus,
         };
         RuntimeLog.instance.info(
@@ -599,7 +772,7 @@ class FishMcpService extends ChangeNotifier {
         stage = 'audio_download';
         bytes = await _downloadAudio(audio.uri!);
       }
-      _ensureCurrent(generation, client);
+      ensureRequestCurrent(client);
       stage = 'audio_validate';
       if (bytes == null || bytes.isEmpty) {
         throw FishMcpException(
@@ -618,18 +791,20 @@ class FishMcpService extends ChangeNotifier {
       }
       stage = 'audio_file';
       final directory = await _temporaryDirectory();
-      _ensureCurrent(generation, client);
+      ensureRequestCurrent(client);
       final file = File(
         '${directory.path}/fish_mcp_${DateTime.now().microsecondsSinceEpoch}.$extension',
       );
       await file.writeAsBytes(bytes, flush: true);
-      if (!_isCurrent(generation) || !identical(client, _client)) {
+      if (!_isCurrent(generation) ||
+          !identical(client, _client) ||
+          (isCurrent != null && !isCurrent())) {
         await file.delete();
-        _ensureCurrent(generation, client);
+        ensureRequestCurrent(client);
       }
       RuntimeLog.instance.info(
         'Fish MCP',
-        '音频已获取，tool=${tool.name}, format=$extension, bytes=${bytes.length}, generation_ms=${lastGenerationLatency?.inMilliseconds}',
+        '音频已获取，route=$route, tool=$generationTool, format=$extension, bytes=${bytes.length}, generation_ms=${lastGenerationLatency?.inMilliseconds}',
       );
       await _saveDiagnostics();
       if (!_disposed) notifyListeners();
@@ -644,7 +819,7 @@ class FishMcpService extends ChangeNotifier {
       if (generation == _connectionGeneration &&
           !_disposed &&
           (requestSerial == 0 || requestSerial == _modelRequestSerial)) {
-        if (submitted) {
+        if (requestSerial != 0) {
           _modelSelectionStatus = 'request_failed';
           _lastResultSummary?['model_selection_status'] = 'request_failed';
         }
@@ -756,6 +931,7 @@ class FishMcpService extends ChangeNotifier {
     }
     final client = _client;
     _client = null;
+    _studioSession = null;
     _pendingAuthorization = null;
     lastAuthorizationUri = null;
     tools = const [];

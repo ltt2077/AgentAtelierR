@@ -61,13 +61,60 @@ void main() {
     return controller;
   }
 
-  void discover({required Map<String, dynamic> schema}) {
+  Map<String, dynamic> studioSchema(String name) => {
+    'type': 'object',
+    'properties': switch (name) {
+      'studio_create_project' => {
+        'name': {'type': 'string'},
+        'roster': {'type': 'array'},
+        'default_voice_id': {'type': 'string'},
+        'chapters': {'type': 'array'},
+      },
+      'studio_update_project' => {
+        'project_id': {'type': 'string'},
+        'default_backend': {'type': 'string'},
+        'scene_preset': {'type': 'string'},
+      },
+      'studio_project' => {
+        'project_id': {'type': 'string'},
+      },
+      'studio_write_blocks' => {
+        'project_id': {'type': 'string'},
+        'ops': {'type': 'array'},
+      },
+      'studio_generate' => {
+        'project_id': {'type': 'string'},
+        'blocks': {'type': 'array'},
+        'dry_run': {'type': 'boolean'},
+      },
+      _ => <String, dynamic>{},
+    },
+  };
+
+  void discover({
+    required Map<String, dynamic> schema,
+    bool withStudio = false,
+  }) {
     service.tools = [
       FishMcpToolInfo(
         name: 'text_to_speech',
         description: 'Test tool; no network request is made.',
         inputSchema: schema,
       ),
+      if (withStudio)
+        for (final name in const [
+          'studio_help',
+          'studio_create_project',
+          'studio_update_project',
+          'studio_write_blocks',
+          'studio_project',
+          'studio_generate',
+        ])
+          FishMcpToolInfo(
+            name: name,
+            description: 'Studio fixture; no network request is made.',
+            inputSchema: studioSchema(name),
+          ),
     ];
     service.ttsToolName = 'text_to_speech';
     service.state = FishMcpConnectionState.toolsDiscovered;
@@ -105,7 +152,8 @@ void main() {
       find.byKey(const ValueKey('fish-mcp-model-')),
     );
     expect(model.onChanged, isNotNull);
-    expect(find.text('当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。'), findsOneWidget);
+    expect(find.text('生成路径：text_to_speech'), findsOneWidget);
+    expect(find.text('服务默认使用 text_to_speech，不指定模型。'), findsOneWidget);
 
     // A service notification outside this route (such as an OAuth callback)
     // must rebuild it without another user tap.
@@ -119,20 +167,31 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('official schema warns without blocking a saved model', (
+  testWidgets('official schema routes an explicit model through Studio MCP', (
     tester,
   ) async {
     final tool = jsonDecode(
       File('test/fixtures/fish_mcp_text_to_speech_2026-10-16.json')
           .readAsStringSync(),
     ) as Map<String, dynamic>;
-    discover(schema: tool['inputSchema'] as Map<String, dynamic>);
+    discover(
+      schema: tool['inputSchema'] as Map<String, dynamic>,
+      withStudio: true,
+    );
     SharedPreferences.setMockInitialValues({'fish_mcp_model': 'drama-3'});
     final controller = await openSettings(tester);
     expect(
-      find.text('当前工具没有模型字段，且声明不接受额外参数。仍会提交所选模型，但云端可能忽略或拒绝，无法保证切换。'),
+      find.text(
+        '通过 Studio MCP 将所选模型写入项目的 default_backend，并核对云端项目配置。配置确认不等于验证实际推理模型。',
+      ),
       findsOneWidget,
     );
+    expect(find.text('生成路径：Studio MCP（项目后端配置）'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('fish-mcp-studio-cloud-notice')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('additionalProperties=true'), findsNothing);
     final dropdown = tester.widget<DropdownButtonFormField<String>>(
       find.byKey(const ValueKey('fish-mcp-model-drama-3')),
     );
@@ -169,7 +228,9 @@ void main() {
     }
     await tester.tap(find.text('drama-3').hitTestable());
     await tester.pumpAndSettle();
-    expect(find.text('当前工具未声明模型字段。仍会提交所选模型，云端是否采用尚未确认。'), findsOneWidget);
+    expect(find.text('生成路径：暂不可用'), findsOneWidget);
+    expect(find.textContaining('且缺少 Studio MCP 工具：'), findsOneWidget);
+    expect(find.textContaining('此情况保留 MCP 错误，不启用 REST 回退。'), findsOneWidget);
     expect(find.text('清空未受支持的模型设置'), findsNothing);
     await tester.tap(find.text('保存并使用 MCP'));
     await tester.pumpAndSettle();
@@ -177,6 +238,81 @@ void main() {
     expect(controller.fishMcpAutoFallback, isFalse);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Studio without declared dry_run is shown as unavailable', (
+    tester,
+  ) async {
+    discover(
+      schema: {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string'},
+        },
+      },
+      withStudio: true,
+    );
+    service.tools = [
+      for (final tool in service.tools)
+        if (tool.name == 'studio_generate')
+          FishMcpToolInfo(
+            name: tool.name,
+            description: tool.description,
+            inputSchema: const {
+              'type': 'object',
+              'properties': {
+                'project_id': {'type': 'string'},
+                'blocks': {'type': 'array'},
+              },
+            },
+          )
+        else
+          tool,
+    ];
+    SharedPreferences.setMockInitialValues({'fish_mcp_model': 'drama-3'});
+    await openSettings(tester);
+    expect(service.missingStudioTools, isEmpty);
+    expect(service.studioAvailable, isFalse);
+    expect(find.text('生成路径：暂不可用'), findsOneWidget);
+    expect(
+      find.textContaining('Studio MCP 参数不兼容：studio_generate 未声明字段 dry_run'),
+      findsNWidgets(2),
+    );
+    expect(find.textContaining('Studio MCP：所需工具齐全'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'service default stays on ordinary TTS when Studio is available',
+    (tester) async {
+      discover(
+        schema: {
+          'type': 'object',
+          'properties': {
+            'text': {'type': 'string'},
+          },
+        },
+        withStudio: true,
+      );
+      await openSettings(tester);
+      expect(find.text('生成路径：text_to_speech'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('fish-mcp-studio-cloud-notice')),
+        findsNothing,
+      );
+      final dropdown = find.byKey(const ValueKey('fish-mcp-model-'));
+      await tester.ensureVisible(dropdown);
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('drama-3').hitTestable());
+      await tester.pumpAndSettle();
+      expect(find.text('生成路径：Studio MCP（项目后端配置）'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('fish-mcp-studio-cloud-notice')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('MCP dropdown preserves a previously saved custom model', (
     tester,
@@ -328,6 +464,7 @@ void main() {
   testWidgets('MCP tool schema is expandable and copied without a tool call', (
     tester,
   ) async {
+    SharedPreferences.setMockInitialValues({'fish_mcp_model': 's2-pro'});
     final schema = <String, dynamic>{
       'type': 'object',
       'properties': {
@@ -381,7 +518,7 @@ void main() {
     final decoded = jsonDecode(copied!) as Map<String, dynamic>;
     expect(decoded['name'], 'text_to_speech');
     expect(decoded['inputSchema'], schema);
-    expect(find.textContaining('选择并提交不代表云端已切换'), findsOneWidget);
+    expect(find.textContaining('Studio MCP：缺少 Studio MCP 工具'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

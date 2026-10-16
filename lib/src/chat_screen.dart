@@ -4800,6 +4800,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           primaryReferenceId: widget.controller.fishMcpVoiceForMode(asmr: asmr),
         );
         return await _fishMcpService.synthesize(
+          isCurrent: () => mounted && generation == _speechPlaybackGeneration,
           text: text,
           voice: referenceId.trim().isEmpty ? null : referenceId.trim(),
           model: widget.controller.fishMcpModel.trim().isEmpty
@@ -4823,6 +4824,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           rethrow;
         }
         final fallbackKey = await _secretStore.readFishAudioKey();
+        if (!mounted || generation != _speechPlaybackGeneration) rethrow;
         final fallbackReferenceId = fishReferenceIdForAssistantSpeech(
           segment,
           primaryReferenceId: widget.controller.activeFishAudioReferenceId,

@@ -306,6 +306,7 @@ String? fishMcpReportedModel(CallToolResult result) {
   const containers = [
     'generation',
     'result',
+    'results',
     'data',
     'metadata',
     '_meta',
@@ -475,14 +476,14 @@ Map<String, dynamic> buildFishMcpTtsArguments({
     arguments[voiceField] = voice;
   }
   if (model != null && model.trim().isNotEmpty) {
-    final modelField =
-        const [
-          'model',
-          'model_id',
-          'modelId',
-        ].where(properties.containsKey).firstOrNull ??
-        'model';
-    arguments[modelField] = model;
+    final modelField = const [
+      'model',
+      'model_id',
+      'modelId',
+    ].where(properties.containsKey).firstOrNull;
+    if (modelField != null) {
+      arguments[modelField] = model;
+    }
   }
   final languageField = const [
     'language',
@@ -561,6 +562,9 @@ Set<String> _schemaRequiredFields(Map<String, dynamic> root) {
 /// The adapter and settings must agree on fields declared through local refs.
 Map<String, dynamic> fishMcpSchemaProperties(Map<String, dynamic> root) =>
     Map.unmodifiable(_schemaProperties(root));
+
+Set<String> fishMcpSchemaRequiredFields(Map<String, dynamic> root) =>
+    Set.unmodifiable(_schemaRequiredFields(root));
 
 Map<String, dynamic> _schemaProperties(Map<String, dynamic> root) {
   final result = <String, dynamic>{};
@@ -869,6 +873,7 @@ class _FishMcpAudioParser {
     }
     for (final key in const [
       'result',
+      'results',
       'output',
       'audio_data',
       'audio',

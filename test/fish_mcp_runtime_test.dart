@@ -42,7 +42,15 @@ class _FakeMcpClient extends McpClient {
   }) : pages =
            pages ??
            {
-             null: ListToolsResult(tools: [_tool()]),
+             null: ListToolsResult(
+               tools: [
+                 _tool(
+                   properties: {
+                     'model': {'type': 'string'},
+                   },
+                 ),
+               ],
+             ),
            },
        onCall = onCall ?? ((_) => _inlineResult()),
        super(const Implementation(name: 'local-test-only', version: '1'));
@@ -146,42 +154,40 @@ void main() {
   SharedPreferences.setMockInitialValues({});
 
   group('requested and reported model evidence', () {
-    test(
-      'official schema keeps passthrough separate from cloud model evidence',
-      () async {
-        final definition = jsonDecode(
-          File('test/fixtures/fish_mcp_text_to_speech_2026-10-16.json')
-              .readAsStringSync(),
-        ) as Map<String, dynamic>;
-        final harness = await _Harness.create(
-          client: _FakeMcpClient(
-            pages: {
-              null: ListToolsResult(tools: [Tool.fromJson(definition)]),
-            },
-          ),
-        );
-        await harness.service.discoverTools();
-        await harness.service.synthesize(
+    test('official TTS schema without Studio cannot silently ignore a selected model', () async {
+      final definition = jsonDecode(
+        File('test/fixtures/fish_mcp_text_to_speech_2026-10-16.json')
+            .readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final harness = await _Harness.create(
+        client: _FakeMcpClient(
+          pages: {
+            null: ListToolsResult(tools: [Tool.fromJson(definition)]),
+          },
+        ),
+      );
+      await harness.service.discoverTools();
+      final error = await _failure(
+        harness.service.synthesize(
           text: 'local fixture only',
           model: 'drama-3',
           voice: 'local-voice',
           language: 'ja',
-        );
-        expect(harness.client.requests.single.arguments, {
-          'text': 'local fixture only',
-          'model': 'drama-3',
-          'voice_id': 'local-voice',
-          'language': 'ja',
-        });
-        final report = jsonDecode(harness.service.diagnosticReport) as Map;
-        final request = report['last_request'] as Map;
-        expect(request['model_argument'], 'model');
-        expect(request['model_declared_in_schema'], isFalse);
-        expect(request['schema_rejects_extra_arguments'], isTrue);
-        expect(harness.service.modelSelectionStatus, 'unreported');
-        expect(harness.service.lastReportedModel, isNull);
-      },
-    );
+        ),
+      );
+      expect(error.stage, 'studio_preflight');
+      expect(error.generationSubmitted, isFalse);
+      expect(error.allowsRestFallback, isFalse);
+      expect(harness.client.requests, isEmpty);
+      final report = jsonDecode(harness.service.diagnosticReport) as Map;
+      expect(
+        (report['tools'] as List).single['inputSchema']['additionalProperties'],
+        isFalse,
+      );
+      expect(report['last_request'], isNull);
+      expect(harness.service.modelSelectionStatus, 'no_request');
+      expect(harness.service.lastReportedModel, isNull);
+    });
 
     for (final reported in ['drama-3', 's2.1-pro']) {
       test(
@@ -578,7 +584,7 @@ void main() {
   );
 
   test(
-    'configured model reaches generation when absent from discovery schema',
+    'declared model and configured voice reach ordinary generation',
     () async {
       final harness = await _Harness.create();
       await harness.service.discoverTools();
@@ -671,13 +677,8 @@ void main() {
       );
       await harness.service.discoverTools();
       expect(harness.service.isReady, isTrue);
-      final error = await _failure(
-        harness.service.synthesize(text: 'local', model: 'drama-3'),
-      );
-      expect(harness.client.requests.single.arguments, {
-        'text': 'local',
-        'model': 'drama-3',
-      });
+      final error = await _failure(harness.service.synthesize(text: 'local'));
+      expect(harness.client.requests.single.arguments, {'text': 'local'});
       expect(error.code, 'cloud_invalid_input');
       expect(error.message, 'Cloud rejected the request');
       expect(error.requestId, 'req-cloud-validation');

@@ -273,6 +273,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         final path = await _synthesize(
           segment.text,
           voiceKey,
+          generation: generation,
           stereoEnabled: stereoEnabled,
           stereoPosition: stereoPosition,
         );
@@ -780,6 +781,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   Future<String> _synthesize(
     String ttsText,
     String apiKey, {
+    required int generation,
     required bool stereoEnabled,
     required TtsStereoPosition stereoPosition,
   }) async {
@@ -802,6 +804,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
       );
       try {
         return await FishMcpService.instance.synthesize(
+          isCurrent: () => _isCurrent(generation),
           text: text,
           voice: voice.isEmpty ? null : voice,
           model: c.fishMcpModel.trim().isEmpty ? null : c.fishMcpModel.trim(),
@@ -823,6 +826,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           rethrow;
         }
         final fallbackKey = await const SecretStore().readFishAudioKey();
+        if (!_isCurrent(generation)) rethrow;
         if (fallbackKey.isEmpty || c.activeFishAudioReferenceId.isEmpty) {
           rethrow;
         }

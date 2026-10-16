@@ -424,10 +424,19 @@ void main() {
       },
     );
 
-    test('a configured model passes through an absent or stale schema', () {
+    test('undeclared models are never added to ordinary TTS arguments', () {
       expect(
         buildFishMcpTtsArguments(tool: tool(), text: 'Hello', model: 'drama-3'),
-        {'text': 'Hello', 'model': 'drama-3'},
+        {'text': 'Hello'},
+      );
+      final raw = textSchema()..['additionalProperties'] = false;
+      expect(
+        buildFishMcpTtsArguments(
+          tool: tool(schema: raw..['additionalProperties'] = true),
+          text: 'Hello',
+          model: 'drama-3',
+        ),
+        {'text': 'Hello'},
       );
       expect(
         buildFishMcpTtsArguments(
