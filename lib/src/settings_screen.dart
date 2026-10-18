@@ -2157,7 +2157,6 @@ class SettingsScreenState extends State<SettingsScreen> {
     var model = controller.fishMcpModel;
     final modelOptions = <String>{
       '',
-      's2.1-pro-free',
       's2.1-pro',
       'drama-3',
       if (model.isNotEmpty) model,

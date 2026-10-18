@@ -218,14 +218,10 @@ void main() {
     await tester.ensureVisible(dropdown);
     await tester.tap(dropdown);
     await tester.pumpAndSettle();
-    for (final label in [
-      '服务默认（不指定模型）',
-      's2.1-pro-free',
-      's2.1-pro',
-      'drama-3',
-    ]) {
+    for (final label in ['服务默认（不指定模型）', 's2.1-pro', 'drama-3']) {
       expect(find.text(label).hitTestable(), findsOneWidget);
     }
+    expect(find.text('s2.1-pro-free'), findsNothing);
     await tester.tap(find.text('drama-3').hitTestable());
     await tester.pumpAndSettle();
     expect(find.text('生成路径：暂不可用'), findsOneWidget);
@@ -331,7 +327,6 @@ void main() {
     );
     expect(button.items!.map((item) => item.value), [
       '',
-      's2.1-pro-free',
       's2.1-pro',
       'drama-3',
       'custom-model',
@@ -376,18 +371,18 @@ void main() {
         's2.1-pro',
       );
 
-      await selectModel('s2.1-pro', 's2.1-pro-free');
+      await selectModel('s2.1-pro', '服务默认（不指定模型）');
       await tester.tap(find.text('保存并使用 MCP'));
       await tester.pumpAndSettle();
-      expect(controller.fishMcpModel, 's2.1-pro-free');
+      expect(controller.fishMcpModel, '');
       await openMcpPage(tester);
       expect(
         tester
             .widget<DropdownButtonFormField<String>>(
-              find.byKey(const ValueKey('fish-mcp-model-s2.1-pro-free')),
+              find.byKey(const ValueKey('fish-mcp-model-')),
             )
             .initialValue,
-        's2.1-pro-free',
+        '',
       );
       expect(tester.takeException(), isNull);
     },
