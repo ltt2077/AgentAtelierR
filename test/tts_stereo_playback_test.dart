@@ -11,13 +11,18 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ryza_chat_mvp/src/app_controller.dart';
 import 'package:ryza_chat_mvp/src/app_localization.dart';
+import 'package:ryza_chat_mvp/src/android_companion_runtime.dart';
+import 'package:ryza_chat_mvp/src/audio_envelope.dart';
 import 'package:ryza_chat_mvp/src/chat_screen.dart';
 import 'package:ryza_chat_mvp/src/continuous_asmr_page.dart';
+import 'package:ryza_chat_mvp/src/runtime_log.dart';
 import 'package:ryza_chat_mvp/src/tts_spatial_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Run the real send/confirm and playback paths against loopback LLM/TTS. Only
 // the native player is replaced; inspect the WAV actually handed to playback.
+final _nativeTrace = <String>[];
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final audio = _AudioCapture();
@@ -26,9 +31,13 @@ void main() {
     // Keep the plugin's static initialization future out of a widget test's
     // fake clock, otherwise the next test can await an inactive clock forever.
     await AudioPlayer.global.ensureInitialized();
+    await AndroidCompanionRuntime.instance.initialize();
   });
   tearDownAll(audio.uninstall);
-  setUp(audio.reset);
+  setUp(() async {
+    audio.reset();
+    await AndroidCompanionRuntime.instance.refresh();
+  });
 
   testWidgets(
     'normal replies play fixed left stereo even if settings change during TTS',
@@ -220,7 +229,16 @@ void main() {
       expect(audio.sources, isEmpty);
       expect(audio.played, isEmpty);
       expect(await _speechCacheFiles(tester, fixture.directory), isEmpty);
-      expect(find.text('雨夜轻声陪伴 · 1'), findsNothing);
+      expect(find.text('雨夜轻声陪伴 · 1'), findsOneWidget);
+      expect(find.textContaining('异常音频已跳过'), findsOneWidget);
+      final rejectedReplay = find.descendant(
+        of: find.byKey(const ValueKey('asmr-voice-list')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is IconButton && widget.tooltip == '播放',
+        ),
+      );
+      expect(rejectedReplay, findsOneWidget);
+      expect(tester.widget<IconButton>(rejectedReplay).onPressed, isNull);
       expect(tester.takeException(), isNull);
     },
   );
@@ -380,6 +398,132 @@ void main() {
     },
   );
 
+  testWidgets(
+    'continuous ASMR skips a rejected REST clip and plays the later valid text',
+    (tester) async {
+      final fixture = await _Fixture.create(
+        tester,
+        reply: '第一段暂时听不到，也要保留完整的文字内容。\n第二段是有效语音，会继续陪你听窗外的雨声。',
+        ttsResponses: [_silentWav(), _silentWav(), _monoWav()],
+      );
+      await tester.pumpWidget(
+        MaterialApp(home: ContinuousAsmrPage(controller: fixture.controller)),
+      );
+      await tester.enterText(find.byType(TextField), '雨夜轻声陪伴');
+      await tester.tap(find.text('确定'));
+      fixture.releaseFirstTts();
+      await _waitFor(tester, () => fixture.ttsRequests == 3);
+      await _waitFor(
+        tester,
+        () => find.text('雨夜轻声陪伴 · 2').evaluate().isNotEmpty,
+      );
+      expect(fixture.ttsTexts[0], fixture.ttsTexts[1]);
+      expect(fixture.ttsTexts[2], isNot(fixture.ttsTexts[0]));
+      expect(find.textContaining('第一段暂时听不到'), findsOneWidget);
+      expect(find.textContaining('异常音频已跳过'), findsOneWidget);
+      expect(audio.played, isEmpty);
+      expect(await _speechCacheFiles(tester, fixture.directory), hasLength(1));
+
+      await tester.ensureVisible(find.byTooltip('播放'));
+      await tester.tap(find.byTooltip('播放'));
+      await _waitFor(tester, () => audio.played.length == 1);
+      _expectLeftStereo(audio.played.single.bytes);
+      await audio.complete(audio.played.single.playerId);
+      await _waitFor(
+        tester,
+        () => find.textContaining('朗读结束，已跳过 1 段').evaluate().isNotEmpty,
+      );
+      expect(fixture.ttsRequests, 3);
+      expect(audio.played, hasLength(1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'continuous ASMR stops after two rejected segments without generating the third',
+    (tester) async {
+      final fixture = await _Fixture.create(
+        tester,
+        reply: '第一段暂时无法朗读，仍然保留文字内容。\n第二段也暂时无法朗读，避免继续消耗请求。\n第三段不应该发起语音生成请求。',
+        ttsResponses: [
+          _silentWav(),
+          _silentWav(),
+          _silentWav(),
+          _silentWav(),
+          _monoWav(),
+        ],
+      );
+      await tester.pumpWidget(
+        MaterialApp(home: ContinuousAsmrPage(controller: fixture.controller)),
+      );
+      await tester.enterText(find.byType(TextField), '雨夜轻声陪伴');
+      await tester.tap(find.text('确定'));
+      fixture.releaseFirstTts();
+      await _waitFor(tester, () => fixture.ttsRequests == 4);
+      await _waitFor(
+        tester,
+        () => find.textContaining('音频准备失败').evaluate().isNotEmpty,
+      );
+      expect(fixture.ttsTexts[0], fixture.ttsTexts[1]);
+      expect(fixture.ttsTexts[2], fixture.ttsTexts[3]);
+      expect(fixture.ttsTexts[0], isNot(fixture.ttsTexts[2]));
+      expect(fixture.ttsTexts.any((text) => text.contains('第三段')), isFalse);
+      expect(find.textContaining('异常音频已跳过'), findsNWidgets(2));
+      expect(audio.played, isEmpty);
+      expect(audio.sources, isEmpty);
+      expect(await _speechCacheFiles(tester, fixture.directory), isEmpty);
+      final rejectedReplays = tester.widgetList<IconButton>(
+        find.descendant(
+          of: find.byKey(const ValueKey('asmr-voice-list')),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is IconButton && widget.tooltip == '播放',
+          ),
+        ),
+      );
+      expect(rejectedReplays, hasLength(2));
+      expect(
+        rejectedReplays.every((button) => button.onPressed == null),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'companion stop during an in-flight ASMR request prevents later synthesis',
+    (tester) async {
+      final fixture = await _Fixture.create(
+        tester,
+        reply: '第一段的语音请求尚未返回，现在停止陪伴。\n第二段不应该在停止之后发起合成。',
+      );
+      await tester.pumpWidget(
+        MaterialApp(home: ContinuousAsmrPage(controller: fixture.controller)),
+      );
+      await tester.enterText(find.byType(TextField), '雨夜轻声陪伴');
+      await tester.tap(find.text('确定'));
+      await _waitFor(tester, () => fixture.ttsRequests == 1);
+      await audio.emitCompanionState({
+        'running': false,
+        'stopRequested': true,
+        'muted': true,
+      });
+      await _waitFor(tester, () => find.text('后台陪伴已停止').evaluate().isNotEmpty);
+      fixture.releaseFirstTts();
+      await _waitFor(tester, () => fixture.ttsResponsesSent == 1);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+      await _waitForNoSpeechCache(tester, fixture.directory);
+      expect(fixture.ttsRequests, 1);
+      expect(audio.played, isEmpty);
+      expect(audio.sources, isEmpty);
+      expect(await _speechCacheFiles(tester, fixture.directory), isEmpty);
+      expect(find.text('雨夜轻声陪伴 · 1'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final completesAfterError in [false, true]) {
     testWidgets(
       'continuous ASMR catches resume event errors with completion=$completesAfterError',
@@ -391,7 +535,9 @@ void main() {
             reply: '[whispering]雨声很轻，慢慢休息吧。',
           );
           await tester.pumpWidget(
-            MaterialApp(home: ContinuousAsmrPage(controller: fixture.controller)),
+            MaterialApp(
+              home: ContinuousAsmrPage(controller: fixture.controller),
+            ),
           );
           await tester.enterText(find.byType(TextField), '雨夜轻声陪伴');
           await tester.tap(find.text('确定'));
@@ -424,10 +570,12 @@ void main() {
           // Replay shares the same prepare/resume boundary and must preserve
           // the failure instead of showing a successful playback status.
           audio.failResumeEvents = 1;
-          final replay = find.descendant(
-            of: find.byKey(const ValueKey('asmr-voice-list')),
-            matching: find.byType(IconButton),
-          ).first;
+          final replay = find
+              .descendant(
+                of: find.byKey(const ValueKey('asmr-voice-list')),
+                matching: find.byType(IconButton),
+              )
+              .first;
           await tester.ensureVisible(replay);
           await tester.tap(replay);
           await _waitFor(
@@ -456,7 +604,13 @@ Future<void> _waitFor(WidgetTester tester, bool Function() condition) async {
     );
     await tester.pump(const Duration(milliseconds: 50));
   }
-  expect(condition(), isTrue, reason: 'Loopback speech playback timed out');
+  expect(
+    condition(),
+    isTrue,
+    reason:
+        'Loopback speech playback timed out; recent audio diagnostics:\n'
+        '${RuntimeLog.instance.entries.where((entry) => entry.source.contains('TTS') || entry.source == 'Audio').toList().reversed.take(8).map((entry) => entry.formatted).join('\n')}\nNative: ${_nativeTrace.reversed.take(25).join(', ')}',
+  );
 }
 
 Future<List<String>> _speechCacheFiles(
@@ -470,6 +624,23 @@ Future<List<String>> _speechCacheFiles(
       .toList(),
 ))!;
 
+Future<void> _waitForNoSpeechCache(
+  WidgetTester tester,
+  Directory directory,
+) async {
+  var cleanTurns = 0;
+  for (var attempt = 0; attempt < 80; attempt++) {
+    final files = await _speechCacheFiles(tester, directory);
+    cleanTurns = files.isEmpty ? cleanTurns + 1 : 0;
+    if (cleanTurns >= 3) return;
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(await _speechCacheFiles(tester, directory), isEmpty);
+}
+
 class _Fixture {
   _Fixture(this.controller, this.server, this.serving, this.directory);
   final AppController controller;
@@ -479,6 +650,7 @@ class _Fixture {
   final firstTts = Completer<void>();
   final ttsTexts = <String>[];
   int ttsRequests = 0;
+  int ttsResponsesSent = 0;
   int streamedReplies = 0;
 
   void releaseFirstTts() {
@@ -559,6 +731,7 @@ class _Fixture {
         );
       }
       await request.response.close();
+      if (request.uri.path == '/tts') fixture.ttsResponsesSent++;
     });
     SharedPreferences.setMockInitialValues({
       'active_character_id_v1': 'sophie',
@@ -589,6 +762,15 @@ class _Fixture {
     addTearDown(() async {
       fixture.releaseFirstTts();
       await tester.pumpWidget(const SizedBox.shrink());
+      // AppAudioPlayer disposal releases the shared companion focus owner
+      // asynchronously. Drain it before this widget test's fake clock ends.
+      await tester.pumpAndSettle();
+      var focusDrained = false;
+      final drain = AndroidCompanionRuntime.instance
+          .setPlayerActive(Object(), false)
+          .then((_) => focusDrained = true);
+      await _waitFor(tester, () => focusDrained);
+      await drain;
       controller.dispose();
       await tester.runAsync(() async {
         await server.close(force: true);
@@ -616,7 +798,10 @@ class _AudioCapture {
     'xyz.luan/audioplayers.global',
     'xyz.luan/audioplayers.global/events',
     'xyz.luan/audioplayers',
+    'agent_atelier_r/companion_runtime',
+    'agent_atelier_r/companion_runtime/events',
   };
+  final companionState = <String, Object>{};
   final sources = <String, String>{};
   final played = <_PlayedAudio>[];
   final byteSources = <String, Uint8List>{};
@@ -632,6 +817,22 @@ class _AudioCapture {
   int maxInFlightSources = 0;
 
   void reset() {
+    _nativeTrace.clear();
+    companionState
+      ..clear()
+      ..addAll({
+        'running': true,
+        'starting': false,
+        'stopRequested': false,
+        'notificationsAllowed': true,
+        'phoneStatePermission': false,
+        'callActive': false,
+        'muted': false,
+        'focusLost': false,
+        'audioActive': false,
+        'manufacturer': 'loopback-test',
+        'lastError': '',
+      });
     sources.clear();
     played.clear();
     byteSources.clear();
@@ -655,8 +856,40 @@ class _AudioCapture {
       );
     }
     messenger.setMockMethodCallHandler(
+      const MethodChannel('agent_atelier_r/companion_runtime'),
+      (call) async {
+        _nativeTrace.add('companion.${call.method}');
+        switch (call.method) {
+          case 'start':
+            companionState.addAll({
+              'running': true,
+              'starting': false,
+              'stopRequested': false,
+              'muted': false,
+            });
+          case 'stop':
+            companionState.addAll({
+              'running': false,
+              'stopRequested': true,
+              'muted': true,
+            });
+          case 'setAudioActive':
+            companionState['audioActive'] =
+                (call.arguments as Map)['active'] == true;
+          case 'getState':
+            break;
+          case 'openBackgroundSettings':
+            return {'opened': true, 'destination': 'application_settings'};
+          default:
+            throw MissingPluginException('Unexpected companion method');
+        }
+        return Map<String, Object>.from(companionState);
+      },
+    );
+    messenger.setMockMethodCallHandler(
       const MethodChannel('xyz.luan/audioplayers'),
       (call) async {
+        _nativeTrace.add('player.${call.method}');
         final args = call.arguments as Map;
         final playerId = args['playerId'] as String;
         switch (call.method) {
@@ -673,7 +906,21 @@ class _AudioCapture {
             maxInFlightSources = max(maxInFlightSources, inFlightSources);
             try {
               await sourceGate?.future;
-              sources[playerId] = args['url'] as String;
+              final sourcePath = args['url'] as String;
+              final sourceBytes = await File(sourcePath).readAsBytes();
+              // The production Windows media probe asks the native decoder to
+              // prepare unknown audio. A 12-byte header or zero-frame WAV must
+              // not become "valid" just because this mock always returns 250ms.
+              if (AudioAmplitudeEnvelope.tryParseWav(sourceBytes) == null) {
+                // Real decoders also fail their preparation event stream;
+                // otherwise audioplayers waits for its prepared-event timeout.
+                await error(playerId);
+                throw PlatformException(
+                  code: 'AudioDecoderError',
+                  message: 'Fixture WAV is damaged or contains no PCM frames',
+                );
+              }
+              sources[playerId] = sourcePath;
               byteSources.remove(playerId);
               if (failFileSourceEvents > 0) {
                 failFileSourceEvents--;
@@ -686,6 +933,7 @@ class _AudioCapture {
                   'event': 'audio.onPrepared',
                   'value': true,
                 });
+                _nativeTrace.add('player.preparedEventSent');
               }
             } finally {
               inFlightSources--;
@@ -700,6 +948,9 @@ class _AudioCapture {
             await stopGate?.future;
           case 'release':
             releaseCount++;
+            sources.remove(playerId);
+            byteSources.remove(playerId);
+          case 'dispose':
             sources.remove(playerId);
             byteSources.remove(playerId);
           case 'resume':
@@ -729,6 +980,17 @@ class _AudioCapture {
 
   Future<void> complete(String playerId) =>
       _event(playerId, {'event': 'audio.onComplete'});
+
+  Future<void> emitCompanionState(Map<String, Object> changes) {
+    companionState.addAll(changes);
+    return messenger.handlePlatformMessage(
+      'agent_atelier_r/companion_runtime/events',
+      const StandardMethodCodec().encodeSuccessEnvelope(
+        Map<String, Object>.from(companionState),
+      ),
+      (_) {},
+    );
+  }
 
   Future<void> error(String playerId) => messenger.handlePlatformMessage(
     'xyz.luan/audioplayers/events/$playerId',
@@ -793,6 +1055,12 @@ Uint8List _emptyWav() {
   final header = ByteData.sublistView(bytes);
   header.setUint32(4, 36, Endian.little);
   header.setUint32(40, 0, Endian.little);
+  return bytes;
+}
+
+Uint8List _silentWav() {
+  final bytes = _monoWav();
+  bytes.fillRange(44, bytes.length, 0);
   return bytes;
 }
 

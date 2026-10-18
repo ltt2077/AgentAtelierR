@@ -16,6 +16,7 @@ import 'character_appearance.dart';
 import 'local_skin_store.dart';
 import 'llm_dialogue_signal.dart';
 import 'mimo_tts_config.dart';
+import 'fish_drama3_tags.dart';
 import 'memory_timeline.dart';
 import 'memory_ledger.dart';
 import 'model_thinking.dart';
@@ -1057,6 +1058,9 @@ class AppController extends ChangeNotifier {
   String fishAudioLatency = 'normal';
   double fishAudioSpeed = 1.0;
   String fishMcpModel = '';
+  bool get fishMcpUsesDrama3 =>
+      ttsProvider == TtsProvider.fishAudioMcp &&
+      isFishDrama3Model(fishMcpModel);
   String fishMcpVoice = '';
   String fishMcpAsmrVoice = '';
   bool fishMcpAutoFallback = false;
@@ -2288,7 +2292,13 @@ ${_promptDataBlock('in_person_conversation', _boundedPromptText(inPerson.join('\
     const singingRule =
         '歌唱边界：莱莎觉得自己的歌声不够好，平时会害羞，不主动唱歌；只有用户明确且强烈要求她唱歌、哼唱或把歌唱给用户时才尝试。普通提到音乐、歌词、歌手或唱歌能力不触发歌唱演出。';
     const fishSpeechTextRule =
-        '最高优先级语音文本规则：台词中绝不将省略号与日语促音“っ”连用，禁止“……っ”“…っ”“...っ”（包括中间有空格的形式）；改用自然停顿或重写语句。普通词中的促音，如“待って”，照常使用。';
+        '最高优先级语音文本规则：台词中禁止“……っ”“…っ”“...っ”这类独立喘息促音（包括中间有空格的形式）；改用自然停顿。普通词语和引述中的促音，如“待って”“……って言ったよね”，照常保留，不改动正常日语语法。';
+    final fishDrama3SpeechRule =
+        fishMcpUsesDrama3 &&
+            !independentPerformance &&
+            !independentSpeechPerformance
+        ? 'Drama 3 语音控制：只在主角台词的必要短语前添加[whisper]、[emphasis]、[soft]、[fast]、[slow]、[stress]或[forceful]等内部语义标签，遵守当前标签密度和ASMR开关。客户端会转换为官方成对标签；不要输出尖括号、音素、多说话人或SSML标记，也不要增加喘息。'
+        : '';
     final japanesePunctuationRule =
         narratorLanguage == AppLanguage.japanese ||
             characterReplyLanguage == AppLanguage.japanese
@@ -2315,8 +2325,9 @@ ${longTermMemoryEnabled ? (agentEnabled ? '需要回忆时调用 search_memory�
 ${asmrModeEnabled ? '当前是ASMR轻声交谈，语气亲近、柔和。' : ''}
 $singingRule
 $fishSpeechTextRule
+$fishDrama3SpeechRule
 $japanesePunctuationRule
-${independentSpeechPerformance || !fishTtsEnabled || ttsProvider == TtsProvider.local ? '只输出台词和旁白正文，不输出任何语音情绪、停顿、表情或动作标签；语音演出和肢体表演由独立模块处理。' : '传统语音演出模式：仅为莱莎台词添加与语义一致的情绪标签（如[happy]、[sad]、[relaxed]）及必要的句内[emphasis]、[short pause]；上下句情绪自然衔接。${ttsEmotionIntensity.voiceInstruction} ${ttsCueDensity.promptInstruction} ${ttsEmotionIntensity == TtsEmotionIntensity.off ? "不要添加情绪标签。" : ""} ${asmrModeEnabled ? "优先使用[breathy]、[whispering]、[soft breathy voice]表达轻声气声。" : ""} 旁白和NPC不带语音标签，不输出face/action/posture标签，肢体表演仍由独立模块处理。'}
+${independentSpeechPerformance || !fishTtsEnabled || ttsProvider == TtsProvider.local ? '只输出台词和旁白正文，不输出任何语音情绪、停顿、表情或动作标签；语音演出和肢体表演由独立模块处理。' : '传统语音演出模式：仅为莱莎台词添加与语义一致的情绪标签（如[happy]、[sad]、[relaxed]）及必要的句内[emphasis]、[short pause]；上下句情绪自然衔接。${ttsEmotionIntensity.voiceInstruction} ${ttsCueDensity.promptInstruction} ${ttsEmotionIntensity == TtsEmotionIntensity.off ? "不要添加情绪标签。" : ""} ${asmrModeEnabled ? "优先使用[whispering]或[soft tone]表达轻柔清晰的耳语；不添加喘息、吸气、呼气或持续气声标签。" : ""} 旁白和NPC不带语音标签，不输出face/action/posture标签，肢体表演仍由独立模块处理。'}
 不输出分析过程。遵守服务商政策。''';
     }
     // A stale appearance snapshot must not advertise actions for a new model.
@@ -2424,10 +2435,11 @@ $voiceRule
 ${asmrModeEnabled
           ? ttsProvider == TtsProvider.local
                 ? 'ASMR 已开启：台词语气保持轻柔连贯。'
-                : 'ASMR 已开启：以轻声、近距离、克制的语气为主，可按密度使用 whispering、near-whisper、breathy、short pause 等标签，不喊叫、不堆叠。'
+                : 'ASMR 已开启：以轻声、近距离、克制的语气为主，可按密度使用 whispering、near-whisper、short pause 等标签，不喊叫、不堆叠，不添加喘息、吸气、呼气或持续气声标签。'
           : ''}
 $singingRule
 $fishSpeechTextRule
+$fishDrama3SpeechRule
 $japanesePunctuationRule
 只提交最终对话；提交前检查每条莱莎台词都有合法 face/action，旁白与台词分离，动作来自当前能力且与语义一致。''';
     }
@@ -2480,6 +2492,7 @@ ${ttsProvider == TtsProvider.local ? '本地语音只朗读台词正文，情绪
 ${asmrModeEnabled ? '当前已开启 ASMR 模式。' : '当前未开启 ASMR 模式。'}
 $singingRule
 $fishSpeechTextRule
+$fishDrama3SpeechRule
 $japanesePunctuationRule
 主情绪、face、action 和句内语音标签表达同一情绪轨迹但不要求同名；上下句逐步过渡，避免前一句极度悲伤、后一句无理由欢快。语音关闭也不能省略 face/action。
 

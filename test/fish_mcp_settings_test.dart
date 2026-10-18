@@ -14,6 +14,43 @@ import 'package:ryza_chat_mvp/src/settings_screen.dart';
 
 void main() {
   final service = FishMcpService.instance;
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  final messenger = binding.defaultBinaryMessenger;
+  const companionChannel = MethodChannel('agent_atelier_r/companion_runtime');
+  const companionEvents = MethodChannel(
+    'agent_atelier_r/companion_runtime/events',
+  );
+
+  setUpAll(() {
+    messenger.setMockMethodCallHandler(companionChannel, (call) async {
+      if (call.method == 'openBackgroundSettings') return {'opened': true};
+      if (!const {
+        'getState',
+        'start',
+        'stop',
+        'setAudioActive',
+      }.contains(call.method)) {
+        fail('Unexpected companion method in MCP settings: ${call.method}');
+      }
+      return {
+        'running': call.method != 'stop',
+        'starting': false,
+        'stopRequested': call.method == 'stop',
+        'muted': false,
+        'callActive': false,
+        'notificationsAllowed': true,
+        'phoneStatePermission': false,
+        'manufacturer': 'local-test',
+        'lastError': '',
+      };
+    });
+    messenger.setMockMethodCallHandler(companionEvents, (_) async => null);
+  });
+
+  tearDownAll(() {
+    messenger.setMockMethodCallHandler(companionChannel, null);
+    messenger.setMockMethodCallHandler(companionEvents, null);
+  });
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});

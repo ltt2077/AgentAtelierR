@@ -15,6 +15,7 @@ Future<String> balanceSpeechLoudness(
   bool asmr = false,
   bool stereoEnabled = false,
   TtsStereoPosition stereoPosition = TtsStereoPosition.center,
+  bool preserveQuietLevels = false,
 }) async {
   final output = stereoEnabled
       ? '$path.balanced-stereo-${stereoPosition.name}.wav'
@@ -27,6 +28,7 @@ Future<String> balanceSpeechLoudness(
       asmr,
       stereoEnabled,
       stereoPosition,
+      preserveQuietLevels,
     ))) {
       return output;
     }
@@ -40,6 +42,7 @@ Future<String> balanceSpeechLoudness(
             asmr,
             stereoEnabled,
             stereoPosition,
+            preserveQuietLevels,
           ))) {
         return output;
       }
@@ -65,11 +68,15 @@ Future<String> balanceSpeechLoudness(
 }
 
 Future<bool> _balanceFile(
-  (String, String, bool, bool, TtsStereoPosition) request,
+  (String, String, bool, bool, TtsStereoPosition, bool) request,
 ) async {
   final file = File(request.$1);
   if (await file.length() > 64 * 1024 * 1024) return false;
-  var result = balanceSpeechWav(await file.readAsBytes(), asmr: request.$3);
+  var result = balanceSpeechWav(
+    await file.readAsBytes(),
+    asmr: request.$3,
+    preserveQuietLevels: request.$6,
+  );
   if (result == null) return false;
   if (request.$4) {
     result =
@@ -83,7 +90,11 @@ Future<bool> _balanceFile(
 /// Gentle windowed compression with bounded makeup gain, a silence gate and
 /// linked stereo gain. This balances perceived speech levels, not EQ/frequency.
 /// Returns standard PCM16 WAV with the original channels/rate/frame count.
-Uint8List? balanceSpeechWav(Uint8List bytes, {bool asmr = false}) {
+Uint8List? balanceSpeechWav(
+  Uint8List bytes, {
+  bool asmr = false,
+  bool preserveQuietLevels = false,
+}) {
   if (bytes.length < 44 || bytes.length > 64 * 1024 * 1024) return null;
   String id(int offset) =>
       String.fromCharCodes(bytes.sublist(offset, offset + 4));
@@ -147,6 +158,7 @@ Uint8List? balanceSpeechWav(Uint8List bytes, {bool asmr = false}) {
   final count = (frames / window).ceil();
   final peaks = Float64List(count);
   final gains = Float64List(count);
+  final quiet = List<bool>.filled(count, false);
   var previous = 1.0;
   for (var w = 0; w < count; w++) {
     final first = w * window * channels;
@@ -157,6 +169,7 @@ Uint8List? balanceSpeechWav(Uint8List bytes, {bool asmr = false}) {
       peaks[w] = max(peaks[w], samples[i].abs());
     }
     final rms = sqrt(sum / (end - first));
+    quiet[w] = rms < .02;
     // Below -50 dBFS do not chase silence or amplify background noise.
     if (rms >= .0031623) {
       previous = pow(
@@ -180,6 +193,9 @@ Uint8List? balanceSpeechWav(Uint8List bytes, {bool asmr = false}) {
   // Each interpolation endpoint protects peaks in both adjacent windows.
   // This avoids sample clipping without flattening individual waveform peaks.
   for (var w = 0; w < count; w++) {
+    // Do not turn quiet breaths/noise into foreground sound. Keep compression
+    // for loud words; no speech or ASMR whisper is removed by this option.
+    if (preserveQuietLevels && quiet[w]) gains[w] = min(1, gains[w]);
     final peak = max(
       peaks[w],
       max(peaks[max(0, w - 1)], peaks[min(count - 1, w + 1)]),
@@ -205,8 +221,8 @@ Uint8List? balanceSpeechWav(Uint8List bytes, {bool asmr = false}) {
   for (var f = 0; f < frames; f++) {
     final w = f ~/ window;
     final fraction = (f % window) / window;
-    final gain =
-        gains[w] + (gains[min(count - 1, w + 1)] - gains[w]) * fraction;
+    var gain = gains[w] + (gains[min(count - 1, w + 1)] - gains[w]) * fraction;
+    if (preserveQuietLevels && quiet[w]) gain = min(1, gain);
     for (var c = 0; c < channels; c++) {
       final i = f * channels + c;
       out.setInt16(

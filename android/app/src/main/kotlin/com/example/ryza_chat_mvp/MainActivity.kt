@@ -48,8 +48,8 @@ class MainActivity : FlutterActivity() {
                 Thread {
                     try {
                         val output = if (call.method == "decodeWav") "$path.decoded.wav" else null
-                        val values = SpeechEnvelope.decode(path, output)
-                        mainHandler.post { result.success(output ?: values) }
+                        val analysis = SpeechEnvelope.decode(path, output)
+                        mainHandler.post { result.success(output ?: analysis.toMap()) }
                     } catch (error: Exception) {
                         mainHandler.post { result.error("decode", error.message, null) }
                     }

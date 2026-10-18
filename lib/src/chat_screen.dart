@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -8,6 +9,7 @@ import 'package:audioplayers/audioplayers.dart';
 
 import 'app_audio_player.dart';
 import 'android_companion_runtime.dart';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
@@ -43,6 +45,8 @@ import 'attachment_thumbnail_store.dart';
 import 'image_food_invitation.dart';
 import 'audio_envelope.dart';
 import 'speech_envelope_loader.dart';
+import 'speech_media_probe.dart';
+import 'speech_file_playback.dart';
 import 'speech_loudness.dart';
 import 'tts_spatial_settings.dart';
 import 'character_speech_driver.dart';
@@ -87,6 +91,8 @@ import 'ryza_loading_indicator.dart';
 import 'tap_reaction.dart';
 import 'tts_text_normalizer.dart';
 import 'tts_duration_guard.dart';
+import 'tts_audio_quality.dart';
+import 'speech_preparation.dart';
 import 'local_tts_client.dart';
 import 'local_tts_models.dart';
 import 'appearance_picker_page.dart';
@@ -4243,6 +4249,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             intensity: intensity,
             density: density,
             asmr: asmr,
+            drama3: widget.controller.fishMcpUsesDrama3,
             complete: complete,
           )
           .timeout(const Duration(seconds: 8));
@@ -4474,6 +4481,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         : null;
     String? plannedText;
     var playbackFinished = false;
+    Future<SpeechPreparation<_PreparedSpeech?>>? inFlightPreparation;
     int primaryOrdinalAt(int index) => primaryOrdinals[segments[index]] ?? -1;
     void applyDispatched(List<SpeechPerformanceDispatchCue> cues) {
       if (!performanceIsCurrent() || generation != _speechPlaybackGeneration) {
@@ -4550,30 +4558,53 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
       Future<_PreparedSpeech?> prepareSegmentAt(int index) async {
         final segment = segments[index];
-        try {
-          return await _prepareSpeech(
-            segment,
-            segment.isPrimary ? apiKey : fishApiKey,
-            generation,
-            asmr: asmr,
-            stereoEnabled: stereoEnabled,
-            stereoPosition: stereoPosition,
-          );
-        } on Object catch (error) {
-          if (segment.isPrimary || generation != _speechPlaybackGeneration) {
-            rethrow;
-          }
-          RuntimeLog.instance.warning('TTS', '科洛蒂娅语音生成失败，跳过该片段：$error');
-          return null;
-        }
+        return await _prepareSpeech(
+          segment,
+          segment.isPrimary ? apiKey : fishApiKey,
+          generation,
+          asmr: asmr,
+          stereoEnabled: stereoEnabled,
+          stereoPosition: stereoPosition,
+        );
       }
 
-      Future<_PreparedSpeech?> pending = prepareSegmentAt(0);
+      Future<SpeechPreparation<_PreparedSpeech?>> captureSegmentAt(int index) {
+        return inFlightPreparation = SpeechPreparation.capture(
+          () => prepareSegmentAt(index),
+        );
+      }
+
+      final rejections = SpeechRejectionBudget();
+      Object? lastRejected;
+      var pending = captureSegmentAt(0);
       for (var index = 0; index < segments.length; index++) {
-        final prepared = await pending;
+        final result = await pending;
+        if (identical(inFlightPreparation, pending)) inFlightPreparation = null;
+        if (!performanceIsCurrent() ||
+            generation != _speechPlaybackGeneration) {
+          await result.discard((prepared) async {
+            if (prepared != null) await _deleteTemporarySpeech(prepared.path);
+          });
+          return;
+        }
+        _PreparedSpeech? prepared;
+        if (result.error case final Object error
+            when isRejectedSpeechAudio(error)) {
+          lastRejected = error;
+          final continuePlayback = rejections.shouldSkip(error);
+          RuntimeLog.instance.warning(
+            'TTS',
+            '跳过无效语音片段 ${index + 1}/${segments.length}，保留文本。',
+          );
+          // Do not spend the rest of a long reply on consistently bad output.
+          if (!continuePlayback) break;
+        } else {
+          prepared = result.unwrap();
+          rejections.accepted();
+        }
         if (prepared == null) {
           if (index + 1 < segments.length) {
-            pending = prepareSegmentAt(index + 1);
+            pending = captureSegmentAt(index + 1);
           }
           continue;
         }
@@ -4583,7 +4614,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           return;
         }
         final next = index + 1 < segments.length
-            ? prepareSegmentAt(index + 1)
+            ? captureSegmentAt(index + 1)
             : null;
         final segment = segments[index];
         final displayIndex = _displayIndexForSpeechSegment(
@@ -4616,9 +4647,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         } else {
           _stopSpeakingAnimation();
         }
-        final completed = _audioPlayer.onPlayerComplete.first;
-        await _audioPlayer.play(DeviceFileSource(prepared.path));
-        await Future.any([completed, cancellation.future]);
+        await _playSpeechClip(
+          prepared.path,
+          generation,
+          cancellation.future,
+          isCurrent: performanceIsCurrent,
+        );
         if (!performanceIsCurrent() ||
             generation != _speechPlaybackGeneration) {
           await _deleteSpeechSegments(completedSegments);
@@ -4662,6 +4696,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         }
       }
       if (completedSegments.isEmpty) {
+        if (lastRejected != null) throw lastRejected;
         throw const AiServiceException('没有语音片段生成成功');
       }
       // Audio readiness must not determine whether a character intention is
@@ -4708,6 +4743,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         'TTS',
         '合成与播放完成，分段数=${completedSegments.length}',
       );
+      if (rejections.total > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '已播放可用语音，跳过 ${rejections.total} 段异常音频；文字保留。${rejections.consecutive >= 2 ? '连续异常，已停止后续合成。' : ''}',
+            ),
+          ),
+        );
+      }
       _stopSpeakingAnimation();
       _showAssistantSegment(null, Duration.zero);
       if (identical(_speechCancellation, cancellation)) {
@@ -4723,6 +4767,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (!cancellation.isCompleted) cancellation.complete();
       if (identical(_speechCancellation, cancellation)) {
         _speechCancellation = null;
+      }
+      try {
+        await _audioPlayer.stop();
+      } on Object {
+        // Keep the synthesis/decode error as the reported failure.
+      }
+      if (!performanceIsCurrent() ||
+          recoveryGeneration != _speechPlaybackGeneration) {
+        return;
       }
       for (final path in _temporarySpeechPaths.toList()) {
         unawaited(_deleteTemporarySpeech(path));
@@ -4755,10 +4808,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           content: Text(
             error is FishMcpException
                 ? '${failedProvider.label} 语音生成失败：${error.message}'
+                : error is TtsAudioQualityException
+                ? '${failedProvider.label}：${error.message}'
+                : error is TtsAudioTooLongException
+                ? '${failedProvider.label} 返回的语音明显超长，已停止播放；文本回复不受影响'
                 : '${failedProvider.label} 语音生成失败，文本回复不受影响',
           ),
         ),
       );
+    } finally {
+      // A cancellation can finish playback before its prefetched clip arrives.
+      // Observe the result and remove it without delaying the user's next turn.
+      final abandoned = inFlightPreparation;
+      if (abandoned != null) {
+        unawaited(
+          abandoned.then(
+            (result) => result.discard((prepared) async {
+              if (prepared != null) await _deleteTemporarySpeech(prepared.path);
+            }),
+          ),
+        );
+      }
     }
   }
 
@@ -4776,6 +4846,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       segment,
       primaryProvider: widget.controller.ttsProvider,
     );
+    final replyLanguage = widget.controller.characterReplyLanguage;
+    final requestedSpeed = widget.controller.fishAudioSpeed;
     var actualProvider = provider;
     final playbackFormat = provider == TtsProvider.mimo
         ? 'wav'
@@ -4796,6 +4868,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         'Express $plannedEmotion naturally; preserve continuity with the preceding sentence.',
       if (asmr) 'Speak softly in a close, quiet voice.',
     ].join(' ');
+    final fishText = normalizeFishAudioSynthesisText(
+      segment.isPrimary
+          ? applyFishEmotionIntensityPerSentence(
+              ttsText,
+              emotionIntensity,
+              density: widget.controller.ttsCueDensity,
+              asmr: asmr,
+              drama3:
+                  provider == TtsProvider.fishAudioMcp &&
+                  widget.controller.fishMcpUsesDrama3,
+            )
+          : plainText,
+      asmr: asmr,
+    );
     Future<String> synthesizeFishMcpWithFallback({
       required String text,
       required String format,
@@ -4814,7 +4900,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           model: widget.controller.fishMcpModel.trim().isEmpty
               ? null
               : widget.controller.fishMcpModel.trim(),
-          language: switch (widget.controller.characterReplyLanguage) {
+          language: switch (replyLanguage) {
             AppLanguage.chinese => 'zh',
             AppLanguage.japanese => 'ja',
             AppLanguage.english => 'en',
@@ -4871,29 +4957,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         model: widget.controller.fishAudioModel,
         format: playbackFormat,
         latency: widget.controller.fishAudioLatency,
-        speed: widget.controller.fishAudioSpeed,
+        speed: requestedSpeed,
         baseUrl: widget.controller.fishAudioBaseUrl,
         temperature: emotionIntensity.fishTemperature,
-        text: segment.isPrimary
-            ? applyFishEmotionIntensityPerSentence(
-                ttsText,
-                emotionIntensity,
-                density: widget.controller.ttsCueDensity,
-                asmr: asmr,
-              )
-            : plainText,
+        text: fishText,
       ),
       TtsProvider.fishAudioMcp => synthesizeFishMcpWithFallback(
-        text: segment.isPrimary
-            ? applyFishEmotionIntensityPerSentence(
-                ttsText,
-                emotionIntensity,
-                density: widget.controller.ttsCueDensity,
-                asmr: asmr,
-              )
-            : plainText,
+        text: fishText,
         format: playbackFormat,
-        speed: widget.controller.fishAudioSpeed,
+        speed: requestedSpeed,
         emotionIntensity: emotionIntensity,
       ),
       TtsProvider.dashScope => _dashScopeTtsClient.synthesize(
@@ -4920,7 +4992,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         model: widget.controller.genericTtsModel,
         voice: widget.controller.activeGenericTtsVoice,
         format: playbackFormat,
-        speed: widget.controller.fishAudioSpeed,
+        speed: requestedSpeed,
         instructions:
             widget.controller.genericTtsModel.toLowerCase().contains(
               'gpt-4o-mini-tts',
@@ -4932,7 +5004,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
       TtsProvider.mimo => _mimoTtsClient.synthesize(
         config: widget.controller.mimoTts,
-        language: widget.controller.characterReplyLanguage,
+        language: replyLanguage,
         apiKey: apiKey,
         text: ttsText,
         intensity: emotionIntensity,
@@ -4941,7 +5013,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
       TtsProvider.local => LocalTtsClient.instance.synthesize(
         text: plainText,
-        preferredLanguage: widget.controller.characterReplyLanguage,
+        preferredLanguage: replyLanguage,
         voiceProfileId: widget.controller.localTtsVoiceProfileId,
       ),
     };
@@ -4950,6 +5022,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // because local decoding or duration validation failed.
     final maxAttempts = provider == TtsProvider.fishAudioMcp ? 1 : 2;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!mounted || generation != _speechPlaybackGeneration) {
+        throw const AiServiceException('语音播放已取消');
+      }
       var path = await synthesizeOnce();
       _temporarySpeechPaths.add(path);
       try {
@@ -4961,6 +5036,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           asmr: asmr,
           stereoEnabled: stereoEnabled,
           stereoPosition: stereoPosition,
+          preserveQuietLevels:
+              actualProvider == TtsProvider.fishAudio ||
+              actualProvider == TtsProvider.fishAudioMcp,
         );
         if (balanced != path) {
           _temporarySpeechPaths.add(balanced);
@@ -4972,22 +5050,59 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         }
         final bytes = await File(path).readAsBytes();
         final envelope = await loadSpeechEnvelope(path, bytes);
-        final actualDuration = ttsAudioDuration(envelope);
-        if (provider == TtsProvider.fishAudioMcp &&
-            (bytes.isEmpty ||
-                (actualDuration != null && actualDuration <= Duration.zero))) {
-          throw FishMcpException(
-            stage: 'audio_validation',
-            code: 'audio_decode_failed',
-            message: '语音已由 ${actualProvider.label} 返回，但音频为空或无法解码；未自动重新生成。',
-            generationSubmitted: true,
+        if (!mounted || generation != _speechPlaybackGeneration) {
+          throw const AiServiceException('语音播放已取消');
+        }
+        final actualDuration = envelope == null && Platform.isWindows
+            ? await probeSpeechDuration(path)
+            : ttsAudioDuration(envelope);
+        if (!mounted || generation != _speechPlaybackGeneration) {
+          throw const AiServiceException('语音播放已取消');
+        }
+        if (actualProvider == TtsProvider.fishAudio ||
+            actualProvider == TtsProvider.fishAudioMcp) {
+          if (envelope != null || !Platform.isWindows) {
+            validateSpeechSignal(envelope);
+          } else {
+            RuntimeLog.instance.info(
+              'TTS',
+              '音频已通过系统媒体加载校验；当前编码不支持波形检查，未判断静音或呼吸。',
+            );
+          }
+        }
+        final durationAssessment = actualDuration == null
+            ? null
+            : assessTtsAudioDuration(
+                TtsDurationContext(
+                  text:
+                      actualProvider == TtsProvider.fishAudio ||
+                          actualProvider == TtsProvider.fishAudioMcp
+                      ? fishText
+                      : plainText,
+                  languageCode: replyLanguage == AppLanguage.japanese
+                      ? 'ja'
+                      : replyLanguage == AppLanguage.chinese
+                      ? 'zh'
+                      : 'en',
+                  asmr: asmr,
+                  effectiveSpeed:
+                      actualProvider == TtsProvider.fishAudio ||
+                          actualProvider == TtsProvider.generic
+                      ? requestedSpeed
+                      : 1,
+                ),
+                actualDuration,
+              );
+        if (durationAssessment != null) {
+          RuntimeLog.instance.info(
+            'TTS',
+            '语音时长评估：${jsonEncode(durationAssessment.summary)}',
           );
         }
-        if (actualDuration != null &&
-            isTtsAudioOverlong(plainText, actualDuration, asmr: asmr)) {
+        if (durationAssessment?.isOverlong == true) {
           throw TtsAudioTooLongException(
-            actual: actualDuration,
-            maximum: maximumTtsAudioDuration(plainText, asmr: asmr),
+            actual: actualDuration!,
+            maximum: durationAssessment!.maximum,
           );
         }
         RuntimeLog.instance.info(
@@ -5000,6 +5115,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               'file=${path.split(Platform.pathSeparator).last}',
         );
         return _PreparedSpeech(path: path, envelope: envelope);
+      } on TtsAudioQualityException catch (error) {
+        await _deleteTemporarySpeech(path);
+        if (provider == TtsProvider.fishAudioMcp) {
+          throw FishMcpException(
+            stage: 'audio_validation',
+            code: error.code,
+            message: '${error.message}；未自动重新生成。',
+            generationSubmitted: true,
+          );
+        }
+        if (attempt + 1 >= maxAttempts) rethrow;
+        RuntimeLog.instance.warning('TTS', '返回语音未通过音频检查，重试一次：${error.code}');
       } on TtsAudioTooLongException catch (error) {
         await _deleteTemporarySpeech(path);
         if (attempt + 1 >= maxAttempts) {
@@ -5013,9 +5140,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               generationSubmitted: true,
             );
           }
-          throw AiServiceException(
-            'TTS 音频时长异常（${error.actual.inSeconds} 秒，文本上限约 ${error.maximum.inSeconds} 秒），重新请求后仍未通过校验',
-          );
+          rethrow;
         }
         RuntimeLog.instance.warning(
           'TTS',
@@ -5176,6 +5301,56 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _playSpeechClip(
+    String path,
+    int generation,
+    Future<void> cancellation, {
+    bool Function()? isCurrent,
+  }) async {
+    bool current() =>
+        mounted &&
+        generation == _speechPlaybackGeneration &&
+        (isCurrent?.call() ?? true);
+    final completed = Completer<void>();
+    completed.future.ignore();
+    var sourcePrepared = false;
+    final subscription = _audioPlayer.onPlayerComplete.listen(
+      (_) {
+        if (!completed.isCompleted) completed.complete();
+      },
+      onError: (Object error, StackTrace stack) {
+        if (sourcePrepared && !completed.isCompleted) {
+          completed.completeError(error, stack);
+        }
+      },
+    );
+    try {
+      final started = await playSpeechFile(
+        _audioPlayer,
+        path,
+        isCurrent: current,
+        onPrepared: () => sourcePrepared = true,
+      );
+      if (started) {
+        await Future.any([
+          completed.future.timeout(const Duration(minutes: 10)),
+          cancellation,
+        ]);
+      }
+    } on Object {
+      if (current()) {
+        try {
+          await _audioPlayer.stop();
+        } on Object {
+          // Preserve the original playback error.
+        }
+      }
+      rethrow;
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   Future<void> _playCachedSpeech(
     List<_CachedSpeechSegment> source, {
     bool highlightLatest = true,
@@ -5241,9 +5416,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _performMotionGroupIntent(id);
           }
         }
-        final completed = _audioPlayer.onPlayerComplete.first;
-        await _audioPlayer.play(DeviceFileSource(segment.path));
-        await Future.any([completed, cancellation.future]);
+        await _playSpeechClip(segment.path, generation, cancellation.future);
         if (generation != _speechPlaybackGeneration) return;
         if (index + 1 < segments.length) {
           if (segment.speaker == ChatSpeaker.ryza &&

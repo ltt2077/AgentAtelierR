@@ -338,23 +338,20 @@ void main() {
     },
   );
 
-  test(
-    'Fish Audio request cleans ellipsis-small-tsu without changing words',
-    () async {
-      final client = MockClient((request) async {
-        final body = jsonDecode(request.body) as Map<String, dynamic>;
-        expect(body['text'], '[breathy]あ……、待って！');
-        return http.Response.bytes(
-          Uint8List.fromList(const [0x49, 0x44, 0x33]),
-          200,
-        );
-      });
-
-      await FishAudioClient(client: client).synthesizeBytes(
-        apiKey: 'test-key',
-        referenceId: 'voice-id',
-        text: '[breathy]あ……っ、待って！',
+  test('Fish Audio request cleans breathing tags and standalone ellipsis-small-tsu', () async {
+    final client = MockClient((request) async {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(body['text'], 'あ……、待って！');
+      return http.Response.bytes(
+        Uint8List.fromList(const [0x49, 0x44, 0x33]),
+        200,
       );
-    },
-  );
+    });
+
+    await FishAudioClient(client: client).synthesizeBytes(
+      apiKey: 'test-key',
+      referenceId: 'voice-id',
+      text: '[breathy]あ……っ、待って！',
+    );
+  });
 }

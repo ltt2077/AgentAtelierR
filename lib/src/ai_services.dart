@@ -1443,10 +1443,21 @@ class FishAudioClient {
     double temperature = 0.7,
     String baseUrl = endpoint,
   }) async {
+    final synthesisText = normalizeFishAudioSynthesisText(text);
+    if (synthesisText
+            .replaceAll(RegExp(r'\[[^\[\]\r\n]+\]'), '')
+            .trim()
+            .isEmpty &&
+        !RegExp(
+          r'\[(?:laughing|chuckling|crying|screaming|shouting)\]',
+          caseSensitive: false,
+        ).hasMatch(synthesisText)) {
+      throw const AiServiceException('没有可朗读的文本，未提交 Fish Audio 语音生成');
+    }
     final started = DateTime.now();
     final uri = Uri.parse(baseUrl.trim().isEmpty ? endpoint : baseUrl.trim());
     final requestBody = {
-      'text': normalizeFishAudioText(text),
+      'text': synthesisText,
       'reference_id': referenceId,
       'temperature': temperature.clamp(0.0, 1.0),
       'normalize': true,

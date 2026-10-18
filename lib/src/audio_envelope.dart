@@ -6,14 +6,19 @@ class AudioAmplitudeEnvelope {
     required this.frameDuration,
     required this.values,
     this.rawRms = const [],
+    this.duration,
   });
 
   final Duration frameDuration;
   final List<double> values;
   final List<double> rawRms;
 
+  /// Exact decoded sample-frame duration, independent of RMS window rounding.
+  final Duration? duration;
+
   double valueAt(Duration position) {
     if (values.isEmpty || position.isNegative) return 0;
+    if (duration != null && position >= duration!) return 0;
     final frameMicros = frameDuration.inMicroseconds;
     if (frameMicros <= 0) return 0;
     if (position.inMicroseconds >= frameMicros * values.length) return 0;
@@ -29,51 +34,72 @@ class AudioAmplitudeEnvelope {
     Duration frameDuration = const Duration(milliseconds: 20),
   }) {
     if (bytes.length < 44 ||
+        bytes.length > 64 * 1024 * 1024 ||
+        frameDuration <= Duration.zero ||
         _ascii(bytes, 0, 4) != 'RIFF' ||
         _ascii(bytes, 8, 4) != 'WAVE') {
       return null;
     }
 
     final data = ByteData.sublistView(bytes);
+    final riffEnd = data.getUint32(4, Endian.little) + 8;
+    if (riffEnd < 44 || riffEnd > bytes.length) return null;
     var offset = 12;
     int? format;
     int? channels;
     int? sampleRate;
     int? bitsPerSample;
+    int? blockAlign;
+    int? byteRate;
     int? dataOffset;
     int? dataLength;
-    while (offset + 8 <= bytes.length) {
+    while (offset + 8 <= riffEnd) {
       final id = _ascii(bytes, offset, 4);
       final length = data.getUint32(offset + 4, Endian.little);
       final start = offset + 8;
-      final end = min(start + length, bytes.length);
-      if (id == 'fmt ' && end - start >= 16) {
+      final end = start + length;
+      if (end > riffEnd) return null;
+      if (id == 'fmt ') {
+        if (format != null || length < 16) return null;
         format = data.getUint16(start, Endian.little);
         channels = data.getUint16(start + 2, Endian.little);
         sampleRate = data.getUint32(start + 4, Endian.little);
+        byteRate = data.getUint32(start + 8, Endian.little);
+        blockAlign = data.getUint16(start + 12, Endian.little);
         bitsPerSample = data.getUint16(start + 14, Endian.little);
       } else if (id == 'data') {
+        if (dataOffset != null) return null;
         dataOffset = start;
         dataLength = end - start;
       }
       offset = start + length + (length.isOdd ? 1 : 0);
+      if (offset > riffEnd) return null;
     }
 
     if (format == null ||
         channels == null ||
         channels <= 0 ||
+        channels > 8 ||
         sampleRate == null ||
-        sampleRate <= 0 ||
+        sampleRate < 8000 ||
+        sampleRate > 192000 ||
         bitsPerSample == null ||
         dataOffset == null ||
         dataLength == null ||
-        (format != 1 && format != 3)) {
+        !((format == 1 && const [8, 16, 24, 32].contains(bitsPerSample)) ||
+            (format == 3 && bitsPerSample == 32))) {
       return null;
     }
     final bytesPerSample = (bitsPerSample / 8).ceil();
     if (bytesPerSample <= 0 || bytesPerSample > 4) return null;
     final bytesPerFrame = bytesPerSample * channels;
+    if (blockAlign != bytesPerFrame ||
+        byteRate != sampleRate * bytesPerFrame ||
+        dataLength % bytesPerFrame != 0) {
+      return null;
+    }
     final sampleFrames = dataLength ~/ bytesPerFrame;
+    if (sampleFrames == 0 || sampleFrames > sampleRate * 600) return null;
     final samplesPerEnvelopeFrame = max(
       1,
       (sampleRate * frameDuration.inMicroseconds / 1000000).round(),
@@ -92,7 +118,7 @@ class AudioAmplitudeEnvelope {
           final sampleOffset =
               dataOffset + frame * bytesPerFrame + channel * bytesPerSample;
           final sample = _readSample(data, sampleOffset, format, bitsPerSample);
-          if (sample == null) return null;
+          if (sample == null || !sample.isFinite) return null;
           sumSquares += sample * sample;
           count += 1;
         }
@@ -101,18 +127,24 @@ class AudioAmplitudeEnvelope {
     }
     if (raw.isEmpty) return null;
 
-    return AudioAmplitudeEnvelope.fromRms(raw, frameDuration: frameDuration);
+    return AudioAmplitudeEnvelope.fromRms(
+      raw,
+      frameDuration: frameDuration,
+      duration: Duration(microseconds: sampleFrames * 1000000 ~/ sampleRate),
+    );
   }
 
   factory AudioAmplitudeEnvelope.fromRms(
     List<double> samples, {
     Duration frameDuration = const Duration(milliseconds: 20),
+    Duration? duration,
   }) {
     final raw = samples.map((v) => v.isFinite ? max(0.0, v) : 0.0).toList();
     if (raw.isEmpty) {
       return AudioAmplitudeEnvelope(
         frameDuration: frameDuration,
         values: const [],
+        duration: duration,
       );
     }
 
@@ -145,6 +177,7 @@ class AudioAmplitudeEnvelope {
       // Follow real amplitude troughs; do not invent periodic silent frames.
       values: List<double>.unmodifiable(values),
       rawRms: List<double>.unmodifiable(raw),
+      duration: duration,
     );
   }
 
@@ -155,7 +188,8 @@ class AudioAmplitudeEnvelope {
     int bitsPerSample,
   ) {
     if (format == 3 && bitsPerSample == 32) {
-      return data.getFloat32(offset, Endian.little).clamp(-1.0, 1.0);
+      final value = data.getFloat32(offset, Endian.little);
+      return value.isFinite ? value.clamp(-1.0, 1.0) : null;
     }
     if (format != 1) return null;
     return switch (bitsPerSample) {

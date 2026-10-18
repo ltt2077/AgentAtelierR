@@ -133,11 +133,20 @@ class FishMcpStudioSession {
       onSubmitted: onSubmitted,
     );
     ensureRequestCurrent();
+    var targetConfirmed = false;
+    void summarizeResult(Map<String, Object?> summary) {
+      if (summary['studio_result_target_matched'] == true ||
+          summary['studio_read_target_matched'] == true) {
+        targetConfirmed = true;
+      }
+      onSummary(summary);
+    }
+
     var completed = _completedResult(
       result,
       project: project,
       block: block,
-      onSummary: onSummary,
+      onSummary: summarizeResult,
     );
     if (completed != null) return completed;
     // A pending result is not a reason to submit studio_generate again (not
@@ -178,7 +187,7 @@ class FishMcpStudioSession {
           observed,
           project: project,
           block: block,
-          onSummary: onSummary,
+          onSummary: summarizeResult,
           readback: true,
         );
         if (completed != null) return completed;
@@ -186,8 +195,12 @@ class FishMcpStudioSession {
     }
     throw FishMcpException(
       stage: 'studio_result',
-      code: 'studio_not_completed',
-      message: readBlocksAvailable
+      code: targetConfirmed
+          ? 'studio_not_completed'
+          : 'studio_identity_unconfirmed',
+      message: !targetConfirmed
+          ? 'Studio 尚未确认音频属于本次文本块${readBlocksAvailable ? '，只读查询期限已结束' : '，且未发现兼容的只读查询工具'}；未播放未确认的音频，未重新生成或回退。'
+          : readBlocksAvailable
           ? '本次文本块在只读查询期限内尚未返回可用音频；已保留脱敏状态，未重新生成或回退。'
           : 'Studio 尚未返回本次文本块的可用音频，且未发现兼容的只读查询工具；已保留脱敏状态，未重新生成或回退。',
       outcomeUnknown: true,
@@ -220,9 +233,8 @@ class FishMcpStudioSession {
     'in_progress',
   };
 
-  /// The MCP response may omit a root status. The output of the single new
-  /// block is sufficient, unless an explicit status/changed flag says otherwise.
-  /// Readbacks must identify that exact block: a chapter can contain old audio.
+  /// Completion must identify the exact fresh block, including direct results:
+  /// project/chapter audio and a single unlabelled result may contain old audio.
   static CallToolResult? _completedResult(
     CallToolResult result, {
     required _StudioProject project,
@@ -242,7 +254,8 @@ class FishMcpStudioSession {
     if (data == null) {
       final audio = result.content.whereType<AudioContent>().toList();
       if (!readback && audio.length == 1) {
-        return CallToolResult(content: [audio.single]);
+        onSummary({'${prefix}_target_matched': false});
+        return null;
       }
       throw _invalid('studio_result', 'Studio 未返回可识别的文本块结果。', submitted: true);
     }
@@ -260,6 +273,23 @@ class FishMcpStudioSession {
 
     unwrap(data, 0);
     var waiting = false;
+    bool staleFlag(Map value, String key) {
+      if (!value.containsKey(key)) return false;
+      final flag = value[key];
+      if (flag is bool) return flag;
+      if (flag is num &&
+          flag.isFinite &&
+          flag >= 0 &&
+          flag == flag.roundToDouble()) {
+        if (key == 'dirty' || flag <= 1) return flag > 0;
+      }
+      throw _invalid(
+        'studio_result',
+        'Studio $key 状态标志格式无效，未播放可能过期的音频。',
+        submitted: true,
+      );
+    }
+
     void check(Map value) {
       if (value.containsKey('project_id') &&
           value['project_id'] != project.id) {
@@ -284,8 +314,8 @@ class FishMcpStudioSession {
       }
       if ((value.containsKey('status') &&
               !_completedStatuses.contains(status)) ||
-          value['changed'] == true ||
-          value['dirty'] == true) {
+          staleFlag(value, 'changed') ||
+          staleFlag(value, 'dirty')) {
         waiting = true;
       }
     }
@@ -331,16 +361,18 @@ class FishMcpStudioSession {
           submitted: true,
         );
       }
-      // The generation requested exactly one fresh block; only that direct
-      // response may omit its anchor. Never infer this from a chapter readback.
-      output = single;
+      // Missing identity does not excuse an explicit generation error or a
+      // malformed stale flag in the single requested operation's response.
+      check(single);
+      // A sole result may still be a chapter render; a readback must identify
+      // the requested anchor before this audio can be accepted.
     } else if (entries.isEmpty && collections.isEmpty) {
       final candidates = envelopes
           .where((entry) => entry['anchor'] == block)
           .toList();
       if (candidates.length == 1) output = candidates.single;
-      if (!readback && output == null) output = envelopes.last;
     }
+    onSummary({'${prefix}_target_matched': output != null});
     if (output == null) return null;
     final layers = <Map>[
       output,
@@ -351,7 +383,7 @@ class FishMcpStudioSession {
       '${prefix}_block_status': _statusLabel(output['status']),
       '${prefix}_block_data_status': _statusLabel(layers.last['status']),
       '${prefix}_block_changed': layers.any(
-        (layer) => layer['changed'] == true || layer['dirty'] == true,
+        (layer) => staleFlag(layer, 'changed') || staleFlag(layer, 'dirty'),
       ),
       '${prefix}_target_matched': output['anchor'] == block,
     });
@@ -400,6 +432,40 @@ class FishMcpStudioSession {
             metadata[key] = sourceMetadata[key];
           }
         }
+      }
+    }
+    // Duration evidence belongs to the selected block, never a project or
+    // chapter envelope whose duration can include previous segments.
+    for (final key in const ['duration_s', 'duration_ms']) {
+      final values = <num>{};
+      for (final layer in layers) {
+        final sourceMetadata = layer['metadata'];
+        for (final source in [
+          layer,
+          if (sourceMetadata is Map) sourceMetadata,
+        ]) {
+          if (!source.containsKey(key)) continue;
+          final value = source[key];
+          if (value is! num || !value.isFinite || value < 0) {
+            throw _invalid(
+              'studio_result',
+              'Studio 目标文本块的 $key 元数据无效。',
+              submitted: true,
+            );
+          }
+          values.add(value);
+        }
+      }
+      if (values.length > 1) {
+        throw _invalid(
+          'studio_result',
+          'Studio 目标文本块存在冲突的 $key 元数据。',
+          submitted: true,
+        );
+      }
+      if (values.isNotEmpty) {
+        metadata[key] = values.single;
+        onSummary({'${prefix}_target_$key': values.single});
       }
     }
     final credits = data['credits'];

@@ -12,7 +12,23 @@ import kotlin.math.sqrt
 
 /** Decode off the main thread. Return RMS windows or write standard PCM16 WAV. */
 object SpeechEnvelope {
-    fun decode(path: String, pcmPath: String? = null): List<Double> {
+    data class Analysis(
+        val values: List<Double>,
+        val durationUs: Long,
+        val sampleFrames: Long,
+        val sampleRate: Int,
+        val channels: Int,
+    ) {
+        fun toMap(): Map<String, Any> = mapOf(
+            "values" to values,
+            "durationUs" to durationUs,
+            "sampleFrames" to sampleFrames,
+            "sampleRate" to sampleRate,
+            "channels" to channels,
+        )
+    }
+
+    fun decode(path: String, pcmPath: String? = null): Analysis {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         var pcm: RandomAccessFile? = null
@@ -31,6 +47,7 @@ object SpeechEnvelope {
             decoder.start()
             var rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val timeline = SpeechPcmTimeline().apply { setFormat(rate, channels) }
             var encoding = AudioFormat.ENCODING_PCM_16BIT
             var inputDone = false
             var outputDone = false
@@ -59,28 +76,34 @@ object SpeechEnvelope {
                     val output = decoder.outputFormat
                     rate = output.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                     channels = output.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    timeline.setFormat(rate, channels)
                     encoding = if (output.containsKey(MediaFormat.KEY_PCM_ENCODING)) output.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
                 } else if (index >= 0) {
                     try {
-                        check(rate > 0 && channels > 0)
                         check(encoding == AudioFormat.ENCODING_PCM_16BIT || encoding == AudioFormat.ENCODING_PCM_FLOAT) { "Unsupported decoded PCM" }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0 || info.size == 0) {
+                            outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                            continue
+                        }
                         val buffer = decoder.getOutputBuffer(index)!!.order(ByteOrder.LITTLE_ENDIAN)
+                        check(info.offset >= 0 && info.size >= 0 && info.offset.toLong() + info.size <= buffer.capacity()) {
+                            "Invalid decoded buffer bounds"
+                        }
                         buffer.position(info.offset)
                         buffer.limit(info.offset + info.size)
                         val bytes = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+                        check(info.size % (bytes * channels) == 0) { "Incomplete decoded sample frame" }
                         val converted = if (pcm != null) ByteBuffer.allocate(info.size / bytes * 2).order(ByteOrder.LITTLE_ENDIAN) else null
-                        var frame = 0L
                         while (buffer.remaining() >= bytes * channels) {
-                            val micros = info.presentationTimeUs + frame * 1000000L / rate
-                            check(micros < 600000000L) { "Audio exceeds ten minutes" }
-                            val window = (micros.coerceAtLeast(0) / 20000).toInt()
+                            // PTS may start at 52 seconds or jump between codec
+                            // buffers. Only PCM frame count determines playback.
+                            val window = timeline.nextWindow()
                             while (sums.size <= window) { sums.add(0.0); counts.add(0) }
                             repeat(channels) {
                                 val sample = if (bytes == 4) buffer.float.toDouble() else buffer.short / 32768.0
                                 converted?.putShort((if (sample.isFinite()) (sample * 32768).toInt().coerceIn(-32768, 32767) else 0).toShort())
                                 if (sample.isFinite()) { sums[window] = sums[window] + sample * sample; counts[window] = counts[window] + 1 }
                             }
-                            frame++
                         }
                         if (converted != null) {
                             pcmSize += converted.position()
@@ -91,6 +114,7 @@ object SpeechEnvelope {
                     outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                 }
             }
+            check(timeline.sampleFrames > 0L) { "Empty decoded audio" }
             if (pcm != null) {
                 check(pcmSize > 0) { "Empty decoded audio" }
                 val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -101,7 +125,13 @@ object SpeechEnvelope {
                 pcm.seek(0)
                 pcm.write(header.array())
             }
-            return sums.indices.map { if (counts[it] == 0) 0.0 else sqrt(sums[it] / counts[it]) }
+            return Analysis(
+                sums.indices.map { if (counts[it] == 0) 0.0 else sqrt(sums[it] / counts[it]) },
+                timeline.durationUs,
+                timeline.sampleFrames,
+                timeline.sampleRate,
+                timeline.channels,
+            )
         } finally {
             pcm?.close()
             try { codec?.stop() } catch (_: Exception) { }

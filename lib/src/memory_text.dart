@@ -1,4 +1,5 @@
 import 'chat_segments.dart' show speechDeliveryTags, speechEmotionTags;
+import 'fish_drama3_tags.dart';
 
 final _privateMemoryBlocks = RegExp(
   r'\\?<(think|tool_call|function_call|horae|horaeevent)\b[^>]*>[\s\S]*?\\?</\1\s*>',
@@ -29,6 +30,7 @@ String cleanMemoryText(String value, {bool preserveLines = false}) {
         );
         if (speechEmotionTags.contains(emotion) ||
             speechDeliveryTags.contains(cue) ||
+            fishDrama3DeliveryCueNames.contains(cue) ||
             RegExp(
               r'^(?:face|action|posture|emotion|delivery|think|answer|code|tool_call|function_call)(?:\s*:|$)',
             ).hasMatch(cue)) {

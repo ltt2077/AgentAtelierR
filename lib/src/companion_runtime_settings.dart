@@ -166,6 +166,7 @@ class _CompanionRuntimeSettingsState extends State<CompanionRuntimeSettings>
           child: GlassContentCard(
             liquidGlass: GlassStyleScope.resolve(context),
             child: ExpansionTile(
+              key: const PageStorageKey('companion-runtime-expansion'),
               initiallyExpanded: false,
               tilePadding: const EdgeInsets.symmetric(
                 horizontal: 16,

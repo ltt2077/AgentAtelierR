@@ -35,6 +35,115 @@ CallToolResult _inlineResult() => CallToolResult(
   content: [AudioContent(data: base64Encode(_mp3), mimeType: 'audio/mpeg')],
 );
 
+// This fixture deliberately uses the public text_to_speech schema without a
+// model field, so an explicit Drama 3 selection must use the real Studio path.
+_FakeMcpClient _studioTagClient() {
+  Tool studioTool(String name, Map<String, dynamic> properties) => Tool(
+    name: name,
+    inputSchema: JsonSchema.fromJson({
+      'type': 'object',
+      'properties': properties,
+      'additionalProperties': false,
+    }),
+  );
+  final project = <String, dynamic>{
+    'project_id': 'local-tag-project',
+    'default_backend': 's2.1-pro',
+    'scene_preset': 'studio',
+    'chapters': [
+      {'anchor': 'local-tag-chapter'},
+    ],
+  };
+  return _FakeMcpClient(
+    pages: {
+      null: ListToolsResult(
+        tools: [
+          _tool(
+            properties: {
+              'voice_id': {'type': 'string'},
+            },
+          ),
+          studioTool('studio_help', {}),
+          studioTool('studio_create_project', {
+            'name': {'type': 'string'},
+            'roster': {'type': 'array'},
+            'default_voice_id': {'type': 'string'},
+            'chapters': {'type': 'array'},
+          }),
+          studioTool('studio_update_project', {
+            'project_id': {'type': 'string'},
+            'default_backend': {'type': 'string'},
+            'scene_preset': {'type': 'string'},
+          }),
+          studioTool('studio_project', {
+            'project_id': {'type': 'string'},
+          }),
+          studioTool('studio_write_blocks', {
+            'project_id': {'type': 'string'},
+            'ops': {'type': 'array'},
+          }),
+          studioTool('studio_generate', {
+            'project_id': {'type': 'string'},
+            'blocks': {'type': 'array'},
+            'dry_run': {'type': 'boolean'},
+          }),
+        ],
+      ),
+    },
+    onCall: (request) {
+      final arguments = request.arguments;
+      final Map<String, dynamic> result;
+      switch (request.name) {
+        case 'text_to_speech':
+          return _inlineResult();
+        case 'studio_help':
+          result = {'overview': 'Local tag fixture'};
+          break;
+        case 'studio_create_project':
+          project['default_voice_id'] = arguments['default_voice_id'];
+          result = {...project};
+          break;
+        case 'studio_update_project':
+          project.addAll(arguments);
+          result = {...project};
+          break;
+        case 'studio_project':
+          result = {...project};
+          break;
+        case 'studio_write_blocks':
+          result = {
+            'results': [
+              {'anchor': 'local-tag-block'},
+            ],
+          };
+          break;
+        case 'studio_generate':
+          result = arguments['dry_run'] == true
+              ? {
+                  'blocks_to_generate': 1,
+                  'cached': 0,
+                  'estimated_credits': 20,
+                  'balance': 1000,
+                }
+              : {
+                  'status': 'done',
+                  'results': [
+                    {
+                      'anchor': 'local-tag-block',
+                      'audio_url':
+                          'https://platform.r2.fish.audio/local/tag-test.mp3',
+                    },
+                  ],
+                };
+          break;
+        default:
+          fail('Unexpected local fixture tool ${request.name}');
+      }
+      return CallToolResult(content: const [], structuredContent: result);
+    },
+  );
+}
+
 class _FakeMcpClient extends McpClient {
   _FakeMcpClient({
     Map<String?, ListToolsResult>? pages,
@@ -152,6 +261,145 @@ Future<FishMcpException> _failure(Future<String> result) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   SharedPreferences.setMockInitialValues({});
+
+  test(
+    'MCP normalizes breathing tags before sending its single generation',
+    () async {
+      final harness = await _Harness.create();
+      await harness.service.discoverTools();
+      await harness.service.synthesize(
+        text: '[panting][gasping][whispering][whispering]こんにちは。。。。',
+        model: 'drama-3',
+      );
+      expect(
+        harness.client.requests.single.arguments['text'],
+        '<whisper>こんにちは。</whisper>',
+      );
+      final report = jsonDecode(harness.service.diagnosticReport) as Map;
+      expect(
+        (report['last_request'] as Map)['text_utf8_bytes'],
+        utf8.encode('<whisper>こんにちは。</whisper>').length,
+      );
+      expect(harness.downloads, isEmpty);
+    },
+  );
+
+  test(
+    'Drama 3 compiles scoped tags into its only generated Studio block',
+    () async {
+      const claudiaVoice = '7b7667d545f94326a7089830d2b55261';
+      final harness = await _Harness.create(
+        client: _studioTagClient(),
+        onDownload: (_) => http.Response.bytes(
+          _mp3,
+          200,
+          headers: {'content-type': 'audio/mpeg'},
+        ),
+      );
+      await harness.service.discoverTools();
+      final path = await harness.service.synthesize(
+        text:
+            '[happy][panting][gasping][whispering]こんにちは。'
+            '[emphasis]大切です。[soft]またね。',
+        voice: claudiaVoice,
+        model: 'drama-3',
+      );
+      expect(path, endsWith('.mp3'));
+      final writes = harness.client.requests
+          .where((request) => request.name == 'studio_write_blocks')
+          .toList();
+      expect(writes, hasLength(1));
+      final block = (writes.single.arguments['ops'] as List).single as Map;
+      final text = block['text'] as String;
+      expect(text, contains('[happy]'));
+      expect(text, contains('<whisper>'));
+      expect(text, contains('</whisper>'));
+      expect(text, contains('<emphasis>大切です。</emphasis>'));
+      expect(text, contains('<soft>またね。</soft>'));
+      expect(text, isNot(matches(RegExp(r'panting|gasping|breathy'))));
+      expect(block['voice'], claudiaVoice);
+      final created = harness.client.requests.singleWhere(
+        (request) => request.name == 'studio_create_project',
+      );
+      expect(created.arguments['default_voice_id'], claudiaVoice);
+      final generations = harness.client.requests
+          .where((request) => request.name == 'studio_generate')
+          .toList();
+      expect(generations, hasLength(2));
+      expect(
+        generations.where((request) => request.arguments['dry_run'] != true),
+        hasLength(1),
+      );
+      expect(
+        harness.client.requests.where(
+          (request) => request.name == 'text_to_speech',
+        ),
+        isEmpty,
+      );
+      expect(harness.downloads, hasLength(1));
+    },
+  );
+
+  test('default and S2.1 Pro keep their original bracket cues', () async {
+    final harness = await _Harness.create();
+    await harness.service.discoverTools();
+    for (final model in <String?>[null, 's2.1-pro']) {
+      await harness.service.synthesize(
+        text: '[happy][whispering]こんにちは。[emphasis]大切です。',
+        model: model,
+      );
+      expect(
+        harness.client.requests.last.arguments['text'],
+        '[happy][whispering]こんにちは。[emphasis]大切です。',
+      );
+    }
+    expect(harness.client.requests, hasLength(2));
+    expect(
+      harness.client.requests.every(
+        (request) => request.name == 'text_to_speech',
+      ),
+      isTrue,
+    );
+    expect(harness.downloads, isEmpty);
+  });
+
+  test('empty Drama 3 wrappers cannot submit a generation', () async {
+    final harness = await _Harness.create(client: _studioTagClient());
+    await harness.service.discoverTools();
+    final error = await _failure(
+      harness.service.synthesize(
+        text: '<whisper> </whisper><soft></soft><emphasis> </emphasis>',
+        voice: 'configured-voice',
+        model: 'drama-3',
+      ),
+    );
+    expect(error.code, 'empty_synthesis_text');
+    expect(error.generationSubmitted, isFalse);
+    expect(harness.client.requests, isEmpty);
+    expect(harness.downloads, isEmpty);
+  });
+
+  test('breathing-only input is rejected before any paid MCP call', () async {
+    final harness = await _Harness.create();
+    await harness.service.discoverTools();
+    final error = await _failure(
+      harness.service.synthesize(text: '[panting][gasping][breathy]'),
+    );
+    expect(error.code, 'empty_synthesis_text');
+    expect(error.generationSubmitted, isFalse);
+    expect(harness.client.requests, isEmpty);
+  });
+
+  test('whisper-only input cannot submit an empty Studio generation', () async {
+    final harness = await _Harness.create();
+    await harness.service.discoverTools();
+    final error = await _failure(
+      harness.service.synthesize(text: '[whispering][whispering]'),
+    );
+    expect(error.code, 'empty_synthesis_text');
+    expect(error.generationSubmitted, isFalse);
+    expect(harness.client.requests, isEmpty);
+  });
 
   group('requested and reported model evidence', () {
     test('official TTS schema without Studio cannot silently ignore a selected model', () async {

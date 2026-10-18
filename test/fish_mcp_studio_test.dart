@@ -335,17 +335,66 @@ void main() {
   );
 
   test(
-    'Studio accepts inline AudioContent without an audio download',
+    'Studio rejects unidentified inline audio without a readback tool',
     () async {
       final harness = await _Harness.create(
         client: _StudioClient(inlineAudio: true),
       );
-      final path = await harness.synthesize();
-      expect(await File(path).readAsBytes(), _mp3);
+      final error = await _failure(harness.synthesize());
+      expect(error.code, 'studio_identity_unconfirmed');
+      expect(error.generationSubmitted, isTrue);
+      expect(error.allowsRestFallback, isFalse);
       expect(harness.client.paidGenerations, hasLength(1));
       expect(harness.downloads, isEmpty);
     },
   );
+
+  test(
+    'Studio writes Drama 3 whisper pairs without repeated breath cues',
+    () async {
+      final harness = await _Harness.create();
+      await harness.synthesize(
+        text: '[panting][gasping][whispering][whispering]こんにちは。。。。',
+      );
+      final ops =
+          harness.client.named('studio_write_blocks').single.arguments['ops']
+              as List;
+      expect((ops.single as Map)['text'], '<whisper>こんにちは。</whisper>');
+      expect(harness.client.paidGenerations, hasLength(1));
+    },
+  );
+
+  test('Studio diagnostics retain exact target duration but exclude chapter duration', () async {
+    final harness = await _Harness.create(
+      client: _StudioClient(
+        intercept: (request) {
+          if (request.name != 'studio_generate' ||
+              request.arguments['dry_run'] == true) {
+            return null;
+          }
+          return _data({
+            'duration_s': 71,
+            'results': [
+              {
+                'anchor': (request.arguments['blocks'] as List).single,
+                'audio_url': 'https://platform.r2.fish.audio/local/speech.mp3',
+                'duration_s': 8.25,
+              },
+            ],
+          });
+        },
+      ),
+    );
+    await harness.synthesize();
+    final report = jsonDecode(harness.service.diagnosticReport) as Map;
+    expect(
+      (report['last_request'] as Map)['studio_result_target_duration_s'],
+      8.25,
+    );
+    expect(harness.service.diagnosticReport, isNot(contains('非公開のローカルテスト')));
+    expect(harness.service.diagnosticReport, isNot(contains('speech.mp3')));
+    expect(harness.client.paidGenerations, hasLength(1));
+  });
 
   test(
     'explicitly supported direct model is used when Studio is unavailable',

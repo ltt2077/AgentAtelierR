@@ -139,6 +139,25 @@ void main() {
     );
   });
 
+  test(
+    'Fish quiet-level protection does not boost breaths or erase whispers',
+    () {
+      final input = wave((f, _) => .012 * tone(f));
+      final protected = balanceSpeechWav(input, preserveQuietLevels: true)!;
+      expect(
+        rms(protected, rate, rate * 2),
+        closeTo(rms(input, rate, rate * 2), .00004),
+      );
+      expect(rms(protected, rate, rate * 2), greaterThan(.005));
+      expect(protected.length, input.length);
+      final regular = balanceSpeechWav(input)!;
+      expect(
+        rms(regular, rate, rate * 2),
+        greaterThan(rms(protected, rate, rate * 2)),
+      );
+    },
+  );
+
   test('stereo stays linked and transient peaks do not clip', () {
     final input = wave(
       (f, c) => (f == rate ? 1.0 : .04 * tone(f)) * (c == 0 ? 1 : .5),

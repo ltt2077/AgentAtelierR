@@ -321,17 +321,211 @@ void main() {
     }
   }
 
-  test('single initial result without anchor is associated with the only requested new block', () async {
+  for (final shape in ['single result', 'root', 'wrapped root', 'inline']) {
+    for (final canRead in [true, false]) {
+      test(
+        '$shape without target identity ${canRead ? 'uses a readback' : 'is rejected without a read tool'}',
+        () async {
+          final unlabelled = switch (shape) {
+            'single result' => _data({
+              'results': [_target(anchor: null, audio: _oldAudio)],
+            }),
+            'wrapped root' => _data({
+              'result': {'status': 'done', 'audio_url': _oldAudio},
+            }),
+            'inline' => CallToolResult(
+              content: [
+                AudioContent(
+                  data: base64Encode([1, 2, 3]),
+                  mimeType: 'audio/wav',
+                ),
+              ],
+            ),
+            _ => _data({
+              'status': 'done',
+              'project_id': _project,
+              'chapter_anchor': _chapter,
+              'audio_url': _oldAudio,
+            }),
+          };
+          final harness = _ResultHarness(
+            initial: unlabelled,
+            reads: [_readAudio()],
+            canRead: canRead,
+          );
+          if (canRead) {
+            final result = await harness.generate();
+            expect(parseFishMcpAudioResult(result).uri.toString(), _audio);
+            expect(jsonEncode(result.toJson()), isNot(contains(_oldAudio)));
+            expect(harness.client.named('studio_read_blocks'), hasLength(1));
+          } else {
+            final error = await _failure(harness.generate());
+            expect(error.code, 'studio_identity_unconfirmed');
+            expect(error.generationSubmitted, isTrue);
+            expect(error.outcomeUnknown, isTrue);
+            expect(error.allowsRestFallback, isFalse);
+          }
+          harness.expectOneGeneration();
+        },
+      );
+    }
+  }
+
+  for (final key in ['dirty', 'changed']) {
+    for (final flag in [true, 1, 1.0]) {
+      test('$key=$flag cannot return stale target audio', () async {
+        final harness = _ResultHarness(
+          initial: _data({
+            'results': [
+              {
+                ..._target(audio: _oldAudio),
+                'data': {key: flag},
+              },
+            ],
+          }),
+          reads: [_readAudio()],
+        );
+        final result = await harness.generate();
+        expect(parseFishMcpAudioResult(result).uri.toString(), _audio);
+        expect(harness.client.named('studio_read_blocks'), hasLength(1));
+        harness.expectOneGeneration();
+      });
+    }
+    for (final flag in [false, 0, 0.0]) {
+      test('$key=$flag accepts exact completed target', () async {
+        final harness = _ResultHarness(
+          initial: _data({
+            'results': [
+              {..._target(), key: flag},
+            ],
+          }),
+        );
+        expect(
+          parseFishMcpAudioResult(await harness.generate()).uri.toString(),
+          _audio,
+        );
+        expect(harness.client.named('studio_read_blocks'), isEmpty);
+        harness.expectOneGeneration();
+      });
+    }
+    for (final flag in <Object?>['true', 'false', null, -1, 0.5, {}, []]) {
+      test('unknown $key=$flag rejects potentially stale audio', () async {
+        final harness = _ResultHarness(
+          initial: _data({
+            'results': [
+              {..._target(audio: _oldAudio), key: flag},
+            ],
+          }),
+        );
+        final error = await _failure(harness.generate());
+        expect(error.generationSubmitted, isTrue);
+        expect(error.allowsRestFallback, isFalse);
+        expect(harness.client.named('studio_read_blocks'), isEmpty);
+        harness.expectOneGeneration();
+      });
+    }
+  }
+
+  test(
+    'numeric chapter dirty count waits for the exact clean target',
+    () async {
+      final harness = _ResultHarness(
+        initial: _data({
+          'dirty': 2,
+          'results': [_target(audio: _oldAudio)],
+        }),
+        reads: [_readAudio()],
+      );
+      expect(
+        parseFishMcpAudioResult(await harness.generate()).uri.toString(),
+        _audio,
+      );
+      expect(harness.client.named('studio_read_blocks'), hasLength(1));
+      harness.expectOneGeneration();
+    },
+  );
+
+  test(
+    'only target duration metadata survives normalization and diagnostics',
+    () async {
+      final harness = _ResultHarness(
+        initial: _data({
+          'duration_s': 71,
+          'metadata': {'duration_ms': 71000},
+          'results': [
+            {
+              ..._target(),
+              'data': {
+                'duration_s': 8.25,
+                'metadata': {'duration_ms': 8250},
+              },
+            },
+          ],
+        }),
+      );
+      final result = await harness.generate();
+      final output =
+          ((result.structuredContentJson!.toJson() as Map)['results'] as List)
+                  .single
+              as Map;
+      expect(output['duration_s'], 8.25);
+      expect(output['duration_ms'], 8250);
+      expect(harness.summary['studio_result_target_duration_s'], 8.25);
+      expect(harness.summary['studio_result_target_duration_ms'], 8250);
+      expect(jsonEncode(harness.summary), isNot(contains(_audio)));
+      harness.expectOneGeneration();
+    },
+  );
+
+  test(
+    'unidentified single result still honors explicit generation failure',
+    () async {
+      final harness = _ResultHarness(
+        initial: _data({
+          'results': [
+            _target(anchor: null, status: 'failed', audio: _oldAudio),
+          ],
+        }),
+        reads: [_readAudio()],
+      );
+      final error = await _failure(harness.generate());
+      expect(error.code, 'studio_generation_failed');
+      expect(harness.client.named('studio_read_blocks'), isEmpty);
+      harness.expectOneGeneration();
+    },
+  );
+
+  test('chapter duration is never presented as target duration', () async {
     final harness = _ResultHarness(
       initial: _data({
-        'results': [_target(anchor: null)],
+        'duration_s': 71,
+        'results': [_target()],
       }),
     );
     final result = await harness.generate();
-    expect(parseFishMcpAudioResult(result).uri.toString(), _audio);
+    expect(jsonEncode(result.toJson()), isNot(contains('duration_s')));
+    expect(
+      harness.summary.containsKey('studio_result_target_duration_s'),
+      isFalse,
+    );
     harness.expectOneGeneration();
-    expect(harness.client.named('studio_read_blocks'), isEmpty);
   });
+
+  for (final duration in <Object?>['71', -1, null]) {
+    test('invalid target duration $duration is rejected', () async {
+      final harness = _ResultHarness(
+        initial: _data({
+          'results': [
+            {..._target(), 'duration_s': duration},
+          ],
+        }),
+      );
+      final error = await _failure(harness.generate());
+      expect(error.generationSubmitted, isTrue);
+      expect(error.allowsRestFallback, isFalse);
+      harness.expectOneGeneration();
+    });
+  }
 
   test(
     'JSON text result does not require an invented root completion status',

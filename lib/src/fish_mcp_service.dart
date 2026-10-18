@@ -15,7 +15,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'ai_services.dart' show detectAudioContainerExtension;
 import 'fish_mcp_protocol.dart';
 import 'fish_mcp_studio.dart';
+import 'fish_drama3_tags.dart';
 import 'runtime_log.dart';
+import 'tts_text_normalizer.dart';
 
 export 'fish_mcp_protocol.dart' show FishMcpException;
 
@@ -561,6 +563,7 @@ class FishMcpService extends ChangeNotifier {
     double speed = 1.0,
     bool Function()? isCurrent,
   }) async {
+    text = normalizeFishAudioSynthesisText(text);
     var stage = 'preflight';
     var submitted = false;
     final generation = _connectionGeneration;
@@ -588,6 +591,21 @@ class FishMcpService extends ChangeNotifier {
         );
       }
       ensureRequestCurrent(client);
+      final spokenText = stripFishDrama3Tags(text)
+          .replaceAll(RegExp(r'\[[^\[\]\r\n]+\]'), '')
+          .trim();
+      final explicitVocalization = RegExp(
+        r'\[(?:laughing|chuckling|crying|screaming|shouting)\]',
+        caseSensitive: false,
+      ).hasMatch(text);
+      if (spokenText.isEmpty && !explicitVocalization) {
+        throw FishMcpException(
+          stage: 'preflight',
+          code: 'empty_synthesis_text',
+          message: '移除过度气声提示后没有可朗读内容，未提交语音生成。',
+        );
+      }
+      if (isFishDrama3Model(model)) text = compileFishDrama3Text(text);
       final route = generationRouteForModel(model);
       if (route == 'unavailable') {
         final issues = [
@@ -651,6 +669,9 @@ class FishMcpService extends ChangeNotifier {
             ? ['project_id', 'blocks']
             : arguments.keys.toList(),
         'text_utf8_bytes': utf8.encode(text).length,
+        'speech_tag_format': isFishDrama3Model(model)
+            ? 'drama3_paired'
+            : 'generic_brackets',
         'requested_model': requestedModel,
         'model_argument': ?modelField,
         'model_declared_in_schema': modelDeclared,

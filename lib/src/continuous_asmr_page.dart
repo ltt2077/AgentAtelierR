@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -21,10 +22,14 @@ import 'mimo_tts_client.dart';
 import 'glass_ui.dart';
 import 'runtime_log.dart';
 import 'speech_envelope_loader.dart';
+import 'speech_media_probe.dart';
 import 'speech_loudness.dart';
 import 'speech_file_playback.dart';
 import 'tts_spatial_settings.dart';
 import 'tts_duration_guard.dart';
+import 'tts_text_normalizer.dart';
+import 'tts_audio_quality.dart';
+import 'speech_preparation.dart';
 import 'local_tts_client.dart';
 import 'local_tts_models.dart';
 
@@ -65,8 +70,13 @@ String buildContinuousAsmrSystemPrompt(
       '一次写完本次要朗读的完整稿件，围绕用户主题自然发展并收束，'
       '原文目标约$targetChars字。不要输出提纲、编号、独立旁白段、分析或动作标签；'
       '不要要求用户回复，不重复开场。语气轻柔、慢节奏，不编造现实感知。'
-      '${controller.ttsCueDensity == TtsCueDensity.off ? '' : '适量使用[whispering]、[breathy]和[short pause]；'}'
-      '台词中禁止将省略号与日语促音“っ”连用，如“……っ”“…っ”“...っ”；自然改写，普通词中的促音照常使用。'
+      '${controller.ttsCueDensity == TtsCueDensity.off
+          ? ''
+          : controller.fishMcpUsesDrama3
+          ? 'Drama 3 发声使用内部语义标签[whisper]或[soft]，需要局部强调才用[emphasis]或[stress]，少量[short pause]；只输出方括号标记，客户端会转换为官方局部成对标签，不输出尖括号、音素或多说话人标记。'
+          : '可以使用[whispering]与少量[short pause]；'}'
+      '轻声耳语也要保持清晰连贯的文字发音，不要使用喘息、吸气、呼气、叹气或其他气声表演标签，不要把台词改写成呼吸音。'
+      '台词中不要在省略号后添加独立喘息促音，如“……っ、”“…っ。”；普通词语和引述中的促音，如“待って”“……って言った”，照常保留。'
       '遵守服务商政策。${policy.promptInstruction}';
 }
 
@@ -79,6 +89,7 @@ class _AsmrClip {
     this.pauseAfter, {
     required this.languagePolicy,
     this.translation,
+    this.audioError,
   });
   final String path;
   String title;
@@ -88,11 +99,7 @@ class _AsmrClip {
   final AsmrLanguagePolicy languagePolicy;
   Duration? duration;
   String? translation;
-}
-
-class _InvalidAsmrAudio implements Exception {
-  @override
-  String toString() => '音频损坏或无法解码，重新生成后仍未通过校验';
+  final String? audioError;
 }
 
 class AsmrPlaybackSurface extends StatelessWidget {
@@ -189,6 +196,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   Completer<void>? _bufferSpace;
   bool _synthesisFinished = false;
   Object? _synthesisError;
+  int _skippedAudio = 0;
   Timer? _clock;
   Completer<void>? _playback;
   int _generation = 0;
@@ -243,6 +251,8 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     required TtsStereoPosition stereoPosition,
     required AsmrLanguagePolicy languagePolicy,
   }) async {
+    final rejections = SpeechRejectionBudget();
+    Object? lastRejected;
     try {
       for (
         var index = 0;
@@ -254,14 +264,47 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         }
         if (!_isCurrent(generation)) break;
         final segment = segments[index];
-        final path = await _synthesize(
-          segment.text,
-          voiceKey,
-          generation: generation,
-          stereoEnabled: stereoEnabled,
-          stereoPosition: stereoPosition,
-          language: languagePolicy.replyLanguage,
-        );
+        late final String path;
+        try {
+          path = await _synthesize(
+            segment.text,
+            voiceKey,
+            generation: generation,
+            stereoEnabled: stereoEnabled,
+            stereoPosition: stereoPosition,
+            language: languagePolicy.replyLanguage,
+          );
+          rejections.accepted();
+        } catch (error) {
+          if (!_isCurrent(generation) || !isRejectedSpeechAudio(error)) rethrow;
+          lastRejected = error;
+          _skippedAudio++;
+          RuntimeLog.instance.warning(
+            'TTS ASMR',
+            '跳过无效语音片段 ${index + 1}/${segments.length}，文本可在异常片段卡片查看。',
+          );
+          setState(
+            () => _clips.add(
+              _AsmrClip(
+                '',
+                '$topic · $_nextClipNumber',
+                asmrSpokenText(segment.text),
+                index,
+                segment.pauseAfter,
+                languagePolicy: languagePolicy,
+                translation: segment.translation ?? _translations[index],
+                audioError: t(
+                  '异常音频已跳过',
+                  'Invalid audio skipped',
+                  '異常な音声をスキップしました',
+                ),
+              ),
+            ),
+          );
+          _nextClipNumber++;
+          if (!rejections.shouldSkip(error)) rethrow;
+          continue;
+        }
         if (!_isCurrent(generation)) {
           await _deleteClipFile(path);
           break;
@@ -304,6 +347,11 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         if (retired != null) await _deleteClipFile(retired!.path);
         _wakeBuffer();
       }
+      if (_isCurrent(generation) &&
+          !_clips.any((clip) => clip.audioError == null) &&
+          lastRejected != null) {
+        throw lastRejected;
+      }
     } on Object catch (error) {
       RuntimeLog.instance.error('TTS ASMR', error);
       if (_isCurrent(generation)) _synthesisError = error;
@@ -311,17 +359,32 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
       if (generation == _generation) {
         _synthesisFinished = true;
         if (mounted && !_playing) {
-          if (_synthesisError != null && _buffer.isEmpty) _running = false;
+          if (_synthesisError != null && _buffer.isEmpty) {
+            _running = false;
+            _finishPendingTranslations();
+          }
           setState(
             () => _status = _synthesisError == null
-                ? t('语音已准备好', 'Audio is ready', '音声の準備ができました')
+                ? _skippedAudio == 0
+                      ? t('语音已准备好', 'Audio is ready', '音声の準備ができました')
+                      : t(
+                          '语音已准备好，已跳过 $_skippedAudio 段异常音频',
+                          'Audio ready; $_skippedAudio invalid clips skipped',
+                          '準備完了・異常な音声 $_skippedAudio 件をスキップ',
+                        )
                 : _synthesisError is FishMcpException
                 ? (_synthesisError! as FishMcpException).toString()
-                : _synthesisError is _InvalidAsmrAudio
+                : _synthesisError is TtsAudioQualityException
                 ? t(
-                    '音频准备失败：文件损坏或无法解码，重新生成后仍未通过校验，请重试',
-                    'Audio is damaged or cannot be decoded after retrying. Please retry.',
-                    '音声が破損しているか、再生成後もデコードできません。再試行してください。',
+                    '音频准备失败：${(_synthesisError! as TtsAudioQualityException).message}；请重试',
+                    'Audio preparation failed: ${(_synthesisError! as TtsAudioQualityException).message}; please retry.',
+                    '音声の準備に失敗しました：${(_synthesisError! as TtsAudioQualityException).message}。再試行してください。',
+                  )
+                : _synthesisError is TtsAudioTooLongException
+                ? t(
+                    '音频准备失败：返回的语音明显过长；请重试',
+                    'Audio preparation failed: the returned speech is excessively long; please retry.',
+                    '音声の準備に失敗しました：生成された音声が長すぎます。再試行してください。',
                   )
                 : t('语音准备失败，请重试', 'Audio failed; retry', '音声の準備に失敗しました'),
           );
@@ -483,6 +546,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     _nextClipNumber = 1;
     _synthesisFinished = false;
     _synthesisError = null;
+    _skippedAudio = 0;
     final topic = _theme.text.trim();
     final languagePolicy = AsmrLanguagePolicy(
       replyLanguage: c.characterReplyLanguage,
@@ -693,7 +757,13 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           _playing = false;
           _activeClip = null;
           _deadline = null;
-          _status = t('朗读结束', 'Playback finished', '朗読終了');
+          _status = _skippedAudio == 0
+              ? t('朗读结束', 'Playback finished', '朗読終了')
+              : t(
+                  '朗读结束，已跳过 $_skippedAudio 段异常音频',
+                  'Playback finished; $_skippedAudio invalid clips skipped',
+                  '朗読終了・異常な音声 $_skippedAudio 件をスキップ',
+                );
         });
       }
     } on Object catch (error) {
@@ -710,6 +780,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   }
 
   Future<void> _deleteClipFile(String path) async {
+    if (path.isEmpty) return;
     try {
       final file = File(path);
       if (await file.exists()) await file.delete();
@@ -719,6 +790,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   }
 
   Future<void> _replay(_AsmrClip clip) async {
+    if (clip.audioError != null) return;
     if (!_allowCompanionAudio()) return;
     // Source preparation must finish before another replay can replace it.
     if (_preparingReplay) return;
@@ -805,6 +877,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     required AppLanguage language,
   }) async {
     final provider = c.ttsProvider;
+    final requestedSpeed = c.fishAudioSpeed;
     var actualProvider = provider;
     final playbackFormat = provider == TtsProvider.mimo || !Platform.isAndroid
         ? 'wav'
@@ -813,15 +886,20 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     final emotionIntensity = c.ttsEmotionIntensity;
     final voiceDirection =
         'Speak in ${language.promptLabel}, softly in an intimate whisper, '
-        'slowly with gentle breaths.';
-    Future<String> synthesizeMcp() async {
-      final voice = c.fishMcpVoiceForMode(asmr: true).trim();
-      final text = applyFishEmotionIntensityPerSentence(
+        'with clear connected words and natural pacing.';
+    final fishText = normalizeFishAudioSynthesisText(
+      applyFishEmotionIntensityPerSentence(
         ttsText,
         emotionIntensity,
         density: c.ttsCueDensity,
-        asmr: c.asmrModeEnabled,
-      );
+        asmr: true,
+        drama3: c.fishMcpUsesDrama3,
+      ),
+      asmr: true,
+    );
+    Future<String> synthesizeMcp() async {
+      final voice = c.fishMcpVoiceForMode(asmr: true).trim();
+      final text = fishText;
       try {
         return await FishMcpService.instance.synthesize(
           isCurrent: () => _isCurrent(generation),
@@ -834,7 +912,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
             AppLanguage.english => 'en',
           },
           format: playbackFormat,
-          speed: c.fishAudioSpeed,
+          speed: requestedSpeed,
         );
       } on Object catch (error) {
         RuntimeLog.instance.warning(
@@ -863,7 +941,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
           model: fallbackModel,
           format: playbackFormat,
           latency: c.fishAudioLatency,
-          speed: c.fishAudioSpeed,
+          speed: requestedSpeed,
           baseUrl: c.fishAudioBaseUrl,
           temperature: emotionIntensity.fishTemperature,
           text: text,
@@ -878,15 +956,10 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         model: c.fishAudioModel,
         format: playbackFormat,
         latency: c.fishAudioLatency,
-        speed: c.fishAudioSpeed,
+        speed: requestedSpeed,
         baseUrl: c.fishAudioBaseUrl,
         temperature: emotionIntensity.fishTemperature,
-        text: applyFishEmotionIntensityPerSentence(
-          ttsText,
-          emotionIntensity,
-          density: c.ttsCueDensity,
-          asmr: c.asmrModeEnabled,
-        ),
+        text: fishText,
       ),
       TtsProvider.fishAudioMcp => synthesizeMcp(),
       TtsProvider.dashScope => DashScopeTtsClient().synthesize(
@@ -913,7 +986,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         model: c.genericTtsModel,
         voice: c.activeGenericTtsVoice,
         format: playbackFormat,
-        speed: c.fishAudioSpeed,
+        speed: requestedSpeed,
         instructions:
             c.genericTtsModel.toLowerCase().contains('gpt-4o-mini-tts')
             ? '${ttsEmotionInstruction(emotionIntensity)} $voiceDirection'
@@ -928,7 +1001,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         text: ttsText,
         intensity: emotionIntensity,
         density: c.ttsCueDensity,
-        asmr: c.asmrModeEnabled,
+        asmr: true,
       ),
       TtsProvider.local => LocalTtsClient.instance.synthesize(
         text: plainText,
@@ -938,13 +1011,18 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
     };
     final maxAttempts = provider == TtsProvider.fishAudioMcp ? 1 : 2;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!_isCurrent(generation)) throw const AiServiceException('ASMR 已停止');
       var path = await synthesizeOnce();
       try {
+        if (!_isCurrent(generation)) throw const AiServiceException('ASMR 已停止');
         final processed = await balanceSpeechLoudness(
           path,
           asmr: true,
           stereoEnabled: stereoEnabled,
           stereoPosition: stereoPosition,
+          preserveQuietLevels:
+              actualProvider == TtsProvider.fishAudio ||
+              actualProvider == TtsProvider.fishAudioMcp,
         );
         if (processed != path) {
           await _deleteClipFile(path);
@@ -952,22 +1030,52 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         }
         final bytes = await File(path).readAsBytes();
         final envelope = await loadSpeechEnvelope(path, bytes);
-        final actualDuration = ttsAudioDuration(envelope);
-        if (envelope == null ||
-            envelope.values.isEmpty ||
-            actualDuration == null ||
-            actualDuration <= Duration.zero) {
-          throw _InvalidAsmrAudio();
-        }
-        if (isTtsAudioOverlong(
-          plainText,
-          actualDuration,
-          asmr: c.asmrModeEnabled,
-        )) {
-          final maximum = maximumTtsAudioDuration(
-            plainText,
-            asmr: c.asmrModeEnabled,
+        if (!_isCurrent(generation)) throw const AiServiceException('ASMR 已停止');
+        final actualDuration = envelope == null && Platform.isWindows
+            ? await probeSpeechDuration(path)
+            : ttsAudioDuration(envelope);
+        if (!_isCurrent(generation)) throw const AiServiceException('ASMR 已停止');
+        if (envelope != null || !Platform.isWindows) {
+          validateSpeechSignal(envelope);
+        } else {
+          RuntimeLog.instance.info(
+            'TTS ASMR',
+            '音频已通过系统媒体加载校验；当前编码不支持波形检查，未判断静音或呼吸。',
           );
+        }
+        if (actualDuration == null || actualDuration <= Duration.zero) {
+          throw const TtsAudioQualityException(
+            'audio_decode_failed',
+            '无法读取音频的有效时长',
+          );
+        }
+        final assessment = assessTtsAudioDuration(
+          TtsDurationContext(
+            text:
+                actualProvider == TtsProvider.fishAudio ||
+                    actualProvider == TtsProvider.fishAudioMcp
+                ? fishText
+                : plainText,
+            languageCode: language == AppLanguage.japanese
+                ? 'ja'
+                : language == AppLanguage.chinese
+                ? 'zh'
+                : 'en',
+            asmr: true,
+            effectiveSpeed:
+                actualProvider == TtsProvider.fishAudio ||
+                    actualProvider == TtsProvider.generic
+                ? requestedSpeed
+                : 1,
+          ),
+          actualDuration,
+        );
+        RuntimeLog.instance.info(
+          'TTS ASMR',
+          '语音时长评估：${jsonEncode(assessment.summary)}',
+        );
+        if (assessment.isOverlong) {
+          final maximum = assessment.maximum;
           await _deleteClipFile(path);
           if (attempt + 1 >= maxAttempts) {
             if (provider == TtsProvider.fishAudioMcp) {
@@ -1000,24 +1108,18 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
               'durationMs=${actualDuration.inMilliseconds}, bytes=${bytes.length}',
         );
         return path;
-      } on _InvalidAsmrAudio {
+      } on TtsAudioQualityException catch (error) {
         await _deleteClipFile(path);
-        if (attempt + 1 >= maxAttempts) {
-          if (provider == TtsProvider.fishAudioMcp) {
-            throw FishMcpException(
-              stage: 'audio_validation',
-              code: 'audio_decode_failed',
-              message:
-                  'ASMR 语音已由 ${actualProvider.label} 返回，但音频为空或无法解码；未自动重新生成。',
-              generationSubmitted: true,
-            );
-          }
-          rethrow;
+        if (provider == TtsProvider.fishAudioMcp) {
+          throw FishMcpException(
+            stage: 'audio_validation',
+            code: error.code,
+            message: '${error.message}；未自动重新生成。',
+            generationSubmitted: true,
+          );
         }
-        RuntimeLog.instance.warning(
-          'TTS',
-          'ASMR 音频为空或无法解码，丢弃并重新请求：attempt=${attempt + 1}/$maxAttempts',
-        );
+        if (attempt + 1 >= maxAttempts) rethrow;
+        RuntimeLog.instance.warning('TTS ASMR', '返回音频未通过检查，重试一次：${error.code}');
       } on Object {
         await _deleteClipFile(path);
         rethrow;
@@ -1116,14 +1218,18 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
                           ),
                           leading: immersive || _running
                               ? Icon(
-                                  active
+                                  clip.audioError != null
+                                      ? Icons.warning_amber_rounded
+                                      : active
                                       ? Icons.graphic_eq_rounded
                                       : Icons.audio_file_outlined,
                                   color: foreground,
                                 )
                               : IconButton.filledTonal(
                                   tooltip: t('播放', 'Play', '再生'),
-                                  onPressed: () => _replay(clip),
+                                  onPressed: clip.audioError == null
+                                      ? () => _replay(clip)
+                                      : null,
                                   icon: const Icon(Icons.play_arrow_rounded),
                                 ),
                           title: Text(
@@ -1132,7 +1238,12 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(color: foreground),
                           ),
-                          subtitle: clip.duration == null
+                          subtitle: clip.audioError != null
+                              ? Text(
+                                  '${clip.audioError}\n${clip.text}${clip.translation == null ? '' : '\n${clip.translation}'}',
+                                  style: TextStyle(color: secondary),
+                                )
+                              : clip.duration == null
                               ? null
                               : Text(
                                   _clockText(clip.duration!),
