@@ -5,7 +5,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
-import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
+import 'android_companion_runtime.dart';
 
 import 'app_controller.dart';
 import 'app_localization.dart';
@@ -178,7 +180,9 @@ class ContinuousAsmrPage extends StatefulWidget {
 class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   final _theme = TextEditingController();
   final _voiceListController = ScrollController();
-  final _player = AudioPlayer();
+  final _player = AppAudioPlayer();
+  final _companionRuntime = AndroidCompanionRuntime.instance;
+  bool _companionStopped = false;
   final _llm = OpenAiCompatibleClient();
   final _buffer = Queue<_AsmrClip>();
   Completer<void>? _bufferChanged;
@@ -384,6 +388,8 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   @override
   void initState() {
     super.initState();
+    _companionStopped = _companionRuntime.stopRequested;
+    _companionRuntime.addListener(_handleCompanionRuntimeChange);
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if ((_playing || _replaying) &&
           _deadline != null &&
@@ -393,6 +399,34 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
         setState(() {});
       }
     });
+  }
+
+  void _handleCompanionRuntimeChange() {
+    final stopped = _companionRuntime.stopRequested;
+    final newlyStopped = stopped && !_companionStopped;
+    _companionStopped = stopped;
+    if (!mounted || !newlyStopped) return;
+    unawaited(
+      _stop(
+        status: t(
+          '后台陪伴已停止',
+          'Background companionship stopped',
+          'バックグラウンド動作を停止しました',
+        ),
+      ),
+    );
+  }
+
+  bool _allowCompanionAudio() {
+    if (!_companionRuntime.stopRequested) return true;
+    setState(
+      () => _status = t(
+        '后台陪伴已停止，请在“设置 → 声音”中恢复陪伴通知后重试',
+        'Background companionship is stopped. Restore its notification in Settings → Audio, then retry.',
+        'バックグラウンド動作は停止中です。「設定 → サウンド」で常駐通知を再表示してから再試行してください。',
+      ),
+    );
+    return false;
   }
 
   Future<void> _stop({String? status}) async {
@@ -416,6 +450,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   }
 
   Future<void> _start() async {
+    if (!_allowCompanionAudio()) return;
     if (_running || _replaying || _theme.text.trim().isEmpty) return;
     if (_timerEnabled && !_atTime && _duration == Duration.zero) {
       setState(
@@ -590,6 +625,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   }
 
   Future<void> _play() async {
+    if (!_allowCompanionAudio()) return;
     if (!_running || _playing || _replaying) return;
     final generation = _generation;
     final now = DateTime.now();
@@ -683,6 +719,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
   }
 
   Future<void> _replay(_AsmrClip clip) async {
+    if (!_allowCompanionAudio()) return;
     // Source preparation must finish before another replay can replace it.
     if (_preparingReplay) return;
     _preparingReplay = true;
@@ -991,6 +1028,7 @@ class _ContinuousAsmrPageState extends State<ContinuousAsmrPage> {
 
   @override
   void dispose() {
+    _companionRuntime.removeListener(_handleCompanionRuntimeChange);
     _clock?.cancel();
     _generation++;
     _running = false;

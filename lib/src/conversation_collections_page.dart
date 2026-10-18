@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
+import 'android_companion_runtime.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -20,7 +23,9 @@ class ConversationCollectionsPage extends StatefulWidget {
 }
 
 class _CollectionsState extends State<ConversationCollectionsPage> {
-  final _player = AudioPlayer();
+  final _player = AppAudioPlayer();
+  final _companionRuntime = AndroidCompanionRuntime.instance;
+  bool _companionStopped = false;
   List<Map<String, dynamic>> _cards = [];
   String _query = '';
   final Set<String> _expanded = {};
@@ -56,11 +61,25 @@ class _CollectionsState extends State<ConversationCollectionsPage> {
   @override
   void initState() {
     super.initState();
+    _companionStopped = _companionRuntime.stopRequested;
+    _companionRuntime.addListener(_handleCompanionRuntimeChange);
     _run(_refresh);
+  }
+
+  void _handleCompanionRuntimeChange() {
+    final stopped = _companionRuntime.stopRequested;
+    final newlyStopped = stopped && !_companionStopped;
+    _companionStopped = stopped;
+    if (!mounted || !newlyStopped) return;
+    _generation++;
+    _cancelPlayback();
+    setState(() => _playing = null);
+    unawaited(_player.stop());
   }
 
   @override
   void dispose() {
+    _companionRuntime.removeListener(_handleCompanionRuntimeChange);
     _generation++;
     _cancelPlayback();
     _player.dispose();

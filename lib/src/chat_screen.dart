@@ -5,6 +5,9 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
+import 'android_companion_runtime.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
@@ -278,8 +281,10 @@ class _CachedSpeechSegment {
 }
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
-  final _audioPlayer = AudioPlayer();
-  final _effectPlayer = AudioPlayer();
+  final _audioPlayer = AppAudioPlayer();
+  final _effectPlayer = AppAudioPlayer();
+  final _companionRuntime = AndroidCompanionRuntime.instance;
+  bool _companionStopped = false;
   late final _aiClient = OpenAiCompatibleClient(
     contextToolExecutor: (name, args) async =>
         widget.controller.queryContextTool(name, args),
@@ -642,6 +647,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _companionStopped = _companionRuntime.stopRequested;
+    _companionRuntime.addListener(_handleCompanionRuntimeChange);
     WidgetsBinding.instance.addObserver(this);
     _activeCharacterId = widget.controller.activeCharacterId;
     _appearance = characterAppearanceById(
@@ -3048,6 +3055,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _companionRuntime.removeListener(_handleCompanionRuntimeChange);
     WidgetsBinding.instance.removeObserver(this);
     // The child drawable may already be freed; do not touch native pointers.
     _facePull.reset(restorePose: false);
@@ -5278,8 +5286,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _showAssistantSegment(null, Duration.zero);
   }
 
+  void _handleCompanionRuntimeChange() {
+    final stopped = _companionRuntime.stopRequested;
+    final newlyStopped = stopped && !_companionStopped;
+    _companionStopped = stopped;
+    if (!mounted || !newlyStopped) return;
+    // Stopping background companionship cancels speech, never the chat reply.
+    _cancelSpeechPlayback();
+    unawaited(_effectPlayer.stop());
+  }
+
   bool get _mayPlayVoice =>
-      widget.pageActive || widget.controller.backgroundVoicePlayback;
+      !_companionRuntime.stopRequested &&
+      (widget.pageActive || widget.controller.backgroundVoicePlayback);
 
   void _syncBackgroundVoicePolicy() {
     if (!_mayPlayVoice &&

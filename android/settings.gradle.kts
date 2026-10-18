@@ -24,3 +24,7 @@ plugins {
 }
 
 include(":app")
+
+// Keep the Dart alarm API, but compile the licensed native fork. This also
+// applies call muting when an alarm starts without a Flutter engine.
+project(":alarm").projectDir = file("../packages/alarm_android")

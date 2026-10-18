@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
+import 'android_companion_runtime.dart';
 import 'app_localization.dart';
 import 'alarm_screen.dart';
 import 'alchemy_screen.dart';
@@ -82,6 +83,8 @@ class _AppShellState extends State<AppShell>
   late final RelayService _relay;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _soundscape = SoundscapeController();
+  final _companionRuntime = AndroidCompanionRuntime.instance;
+  bool _companionStopped = false;
   final _navigation = PageNavigation(AppDestination.chat);
   AppDestination get _destination => _navigation.current;
   final _settingsKey = GlobalKey<SettingsScreenState>();
@@ -114,6 +117,8 @@ class _AppShellState extends State<AppShell>
       duration: const Duration(milliseconds: 280),
     );
     WidgetsBinding.instance.addObserver(this);
+    _companionStopped = _companionRuntime.stopRequested;
+    _companionRuntime.addListener(_handleCompanionRuntimeChange);
     _relay = widget.relayService ?? RelayService.production();
     unawaited(
       _relay.initialize().then(
@@ -148,8 +153,16 @@ class _AppShellState extends State<AppShell>
     );
   }
 
+  void _handleCompanionRuntimeChange() {
+    final stopped = _companionRuntime.stopRequested;
+    if (!mounted || stopped == _companionStopped) return;
+    _soundscape.invalidate();
+    setState(() => _companionStopped = stopped);
+  }
+
   @override
   void dispose() {
+    _companionRuntime.removeListener(_handleCompanionRuntimeChange);
     WidgetsBinding.instance.removeObserver(this);
     if (widget.relayService == null) _relay.dispose();
     _pageTransition.dispose();

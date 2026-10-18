@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -30,7 +32,7 @@ class _MimoTtsSettingsDialogState extends State<MimoTtsSettingsDialog> {
       _preview;
   final _key = TextEditingController();
   final _client = MimoTtsClient();
-  final _player = AudioPlayer();
+  final _player = AppAudioPlayer();
   final _files = <String>{};
   late String _model, _referencePath, _referenceName;
   late bool _enabled;

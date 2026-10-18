@@ -25,9 +25,16 @@ class MainActivity : FlutterActivity() {
     private var preferMaximumFrameRate = false
     private var hasFrameRateRequest = false
     private var cosyVoiceBridge: CosyVoiceFlutterBridge? = null
+    private var companionRuntimeBridge: CompanionRuntimeBridge? = null
+    private var companionStartedForActivity = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        companionRuntimeBridge?.dispose()
+        companionRuntimeBridge = CompanionRuntimeBridge(
+            this,
+            flutterEngine.dartExecutor.binaryMessenger,
+        )
         RelayPushBridge(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         cosyVoiceBridge = CosyVoiceFlutterBridge(
             applicationContext,
@@ -80,6 +87,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        companionRuntimeBridge?.dispose()
+        companionRuntimeBridge = null
         cosyVoiceBridge?.dispose()
         cosyVoiceBridge = null
         super.onDestroy()
@@ -87,6 +96,11 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!companionStartedForActivity) {
+            companionStartedForActivity = true
+            companionRuntimeBridge?.startInitially()
+        }
+        companionRuntimeBridge?.refresh()
         if (hasFrameRateRequest) {
             mainHandler.post {
                 applyPreferredFrameRate(

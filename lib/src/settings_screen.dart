@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -40,6 +42,7 @@ import 'conversation_collections_page.dart';
 import 'conversation_history_page.dart';
 import 'tts_spatial_settings.dart';
 import 'speech_loudness.dart';
+import 'companion_runtime_settings.dart';
 
 String _activeTtsModel(AppController controller) =>
     switch (controller.ttsProvider) {
@@ -637,6 +640,7 @@ class SettingsScreenState extends State<SettingsScreen> {
               ],
               if (_category == SettingsSection.audio) ...[
                 _SectionLabel(language.text('声音', 'Audio', 'サウンド')),
+                CompanionRuntimeSettings(language: language),
                 SwitchListTile(
                   value:
                       controller.activeCharacterProfile.hasSpineResources &&
@@ -1827,7 +1831,7 @@ class SettingsScreenState extends State<SettingsScreen> {
     );
     final apiKey = TextEditingController();
     final previewText = TextEditingController(text: controller.ttsPreviewText);
-    final player = AudioPlayer();
+    final player = AppAudioPlayer();
     final previewFiles = <String>{};
     var enabled = controller.fishTtsEnabled;
     var model = controller.fishAudioModel;
@@ -2586,7 +2590,7 @@ class SettingsScreenState extends State<SettingsScreen> {
     PlatformFile? referenceAudio;
     Uint8List? referenceAudioBytes;
     var referenceAudioSize = 0;
-    final player = AudioPlayer();
+    final player = AppAudioPlayer();
     final previewFiles = <String>{};
     var enabled = controller.fishTtsEnabled;
     var language = controller.dashScopeTtsLanguage;
@@ -3085,7 +3089,7 @@ class SettingsScreenState extends State<SettingsScreen> {
     );
     final preview = TextEditingController(text: controller.ttsPreviewText);
     final key = TextEditingController();
-    final player = AudioPlayer();
+    final player = AppAudioPlayer();
     final previewFiles = <String>{};
     var enabled = controller.fishTtsEnabled;
     var format = controller.fishAudioFormat == 'opus'

@@ -15,6 +15,8 @@ import 'src/app_localization.dart';
 import 'src/app_theme.dart';
 import 'src/app_shell.dart';
 import 'src/runtime_log.dart';
+import 'src/android_companion_runtime.dart';
+import 'src/companion_notification_permission.dart';
 import 'src/local_skin_store.dart';
 import 'src/character_appearance.dart';
 import 'src/character_runtime_profile.dart';
@@ -113,9 +115,11 @@ class _BootstrapAppState extends State<_BootstrapApp> {
       RuntimeLog.instance.info('App', '应用启动，版本 1.0.4.1 MCP FishAudio');
       await initSpineFlutter(enableMemoryDebugging: false);
       await Alarm.init();
+      await AndroidCompanionRuntime.instance.initialize();
       await AudioPlayer.global.setAudioContext(
         AudioContext(
           android: const AudioContextAndroid(
+            // A single native owner coordinates focus for every app player.
             audioFocus: AndroidAudioFocus.none,
           ),
           iOS: AudioContextIOS(
@@ -133,6 +137,9 @@ class _BootstrapAppState extends State<_BootstrapApp> {
         _controller?.removeListener(_handleControllerChanged);
         controller.addListener(_handleControllerChanged);
         setState(() => _controller = controller);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(requestCompanionNotificationPermissionOnce());
+        });
       }
     } on Object catch (error, stackTrace) {
       RuntimeLog.instance.error('Startup', error, stackTrace);

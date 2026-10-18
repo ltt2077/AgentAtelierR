@@ -105,8 +105,10 @@ assets/**/*
 !android/app/src/main/res/drawable-nodpi/launch_logo_android12.png
 !android/app/src/main/res/mipmap-*/ic_launcher.png
 
-# Do not vendor third-party runtime source or extracted application files.
-packages/
+# Keep acquired character runtimes local; only the licensed alarm fork is shared.
+packages/*
+!packages/alarm_android/
+!packages/alarm_android/**
 downloaded_skin_resources/
 /windows.__codex_build_backup/
 /windows/flutter/ephemeral/

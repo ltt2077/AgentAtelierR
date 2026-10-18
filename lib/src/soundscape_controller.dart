@@ -1,4 +1,8 @@
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
+import 'android_companion_runtime.dart';
+
 import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
@@ -6,8 +10,8 @@ import 'runtime_log.dart';
 import 'stage_environment_catalog.dart';
 
 class SoundscapeController {
-  final _bgmPlayer = AudioPlayer();
-  final _ambientPlayer = AudioPlayer();
+  final _bgmPlayer = AppAudioPlayer();
+  final _ambientPlayer = AppAudioPlayer();
   bool? _bgmEnabled;
   bool? _ambientEnabled;
   SceneTime? _sceneTime;
@@ -47,7 +51,9 @@ class SoundscapeController {
     AppController controller, {
     required bool worldMapVisible,
   }) async {
-    if (controller.continuousAsmr || controller.activeCharacterId == 'sophie') {
+    if (AndroidCompanionRuntime.instance.stopRequested ||
+        controller.continuousAsmr ||
+        controller.activeCharacterId == 'sophie') {
       if (!_suspended) {
         await _bgmPlayer.stop();
         await _ambientPlayer.stop();

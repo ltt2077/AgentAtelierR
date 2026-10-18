@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
+
+import 'app_audio_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,7 +26,7 @@ class LocalTtsSettingsPage extends StatefulWidget {
 }
 
 class _LocalTtsSettingsPageState extends State<LocalTtsSettingsPage> {
-  final _player = AudioPlayer();
+  final _player = AppAudioPlayer();
   final _preview = TextEditingController(text: '你好，今天也一起去冒险吧。');
   final _voiceName = TextEditingController();
   final _promptText = TextEditingController();
