@@ -146,6 +146,73 @@ void main() {
     expect(asmrSpokenText('[whispering]今晚下雨了，[short pause]慢慢听。'), '今晚下雨了，慢慢听。');
   });
 
+  test(
+    'ASMR prompt respects translation mode and the captured reading language',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final controller = await AppController.load();
+      addTearDown(controller.dispose);
+      controller.characterReplyLanguage = AppLanguage.japanese;
+      controller.narratorLanguage = AppLanguage.english;
+      controller.translationLanguage = TranslationLanguage.chinese;
+      controller.independentTranslation = false;
+      final inline = buildContinuousAsmrSystemPrompt(
+        controller,
+        targetChars: 350,
+      );
+      expect(inline, contains('全部朗读原文使用 Japanese'));
+      expect(inline, contains('不使用全局旁白语言'));
+      expect(inline, contains('"segments"'));
+
+      const captured = AsmrLanguagePolicy(
+        replyLanguage: AppLanguage.japanese,
+        translationLanguage: TranslationLanguage.chinese,
+        independentTranslation: true,
+      );
+      controller.characterReplyLanguage = AppLanguage.chinese;
+      controller.translationLanguage = TranslationLanguage.none;
+      final inFlight = buildContinuousAsmrSystemPrompt(
+        controller,
+        targetChars: 350,
+        languagePolicy: captured,
+      );
+      expect(inFlight, contains('全部朗读原文使用 Japanese'));
+      expect(inFlight, contains('只输出纯朗读原文'));
+      expect(inFlight, isNot(contains('"segments"')));
+      final next = buildContinuousAsmrSystemPrompt(
+        controller,
+        targetChars: 350,
+      );
+      expect(next, contains('全部朗读原文使用 Chinese'));
+      expect(next, contains('只输出纯朗读原文'));
+    },
+  );
+
+  for (final translation in <String?>[null, '', '今晚下雨了。']) {
+    testWidgets(
+      'ASMR hides disabled, empty or copied translation: $translation',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: AsmrPlaybackSurface(
+              text: '今晚下雨了。',
+              translation: translation,
+              voiceArea: const SizedBox(height: 100),
+              stopLabel: '停止',
+              onStop: () {},
+            ),
+          ),
+        );
+        expect(find.byKey(const ValueKey('asmr-current-text')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('asmr-current-translation')),
+          findsNothing,
+        );
+        expect(find.text('译文生成中…'), findsNothing);
+      },
+    );
+  }
+
   testWidgets('ASMR playback stays black and fits a narrow screen', (
     tester,
   ) async {

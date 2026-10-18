@@ -279,6 +279,20 @@ Future<String> ensureDialogueLanguage({
   allowMultiline: true,
 )).single;
 
+/// Checks independent utterances together without merging their languages.
+Future<List<String>> ensureDialogueLanguages({
+  required List<String> texts,
+  required AppLanguage language,
+  required DialogueLanguageCompletion complete,
+  Iterable<String> ignoredTerms = const [],
+  int maxCorrections = 1,
+}) => _ensureEntriesLanguage(
+  entries: [for (final text in texts) _LanguageEntry(text, language)],
+  complete: complete,
+  ignoredTerms: ignoredTerms,
+  maxCorrections: maxCorrections,
+);
+
 bool hasCompleteInlineTranslations(String source) {
   final segments = parseAssistantSegments(source);
   for (var i = 0; i < segments.length; i++) {
