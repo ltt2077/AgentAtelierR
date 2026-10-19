@@ -71,6 +71,11 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   StreamSubscription<Uri>? _appLinksSubscription;
   bool _showLogo = true;
   bool _characterReady = false;
+  Timer? _readyWatchdog;
+
+  /// Upper bound for the startup loader once the controller is up. Whatever
+  /// happens to a stage, background or plugin, the UI is revealed after this.
+  static const _readyWatchdogDuration = Duration(seconds: 6);
 
   @override
   void initState() {
@@ -90,6 +95,7 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   @override
   void dispose() {
     _logoTimer?.cancel();
+    _readyWatchdog?.cancel();
     _appLinksSubscription?.cancel();
     _controller?.removeListener(_handleControllerChanged);
     super.dispose();
@@ -100,7 +106,22 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   }
 
   void _handleCharacterReady() {
+    _readyWatchdog?.cancel();
     if (!_characterReady && mounted) setState(() => _characterReady = true);
+  }
+
+  /// Runs a non-essential startup step with a timeout. A plugin that throws
+  /// or never completes is logged and skipped instead of freezing startup.
+  Future<void> _optionalStep(
+    String name,
+    Future<void> Function() step, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    try {
+      await step().timeout(timeout);
+    } on Object catch (error, stackTrace) {
+      RuntimeLog.instance.error('Startup:$name', error, stackTrace);
+    }
   }
 
   void _handleCharacterLoadFailed() {
@@ -111,32 +132,54 @@ class _BootstrapAppState extends State<_BootstrapApp> {
 
   Future<void> _initialize() async {
     try {
-      await RuntimeLog.instance.initialize();
-      RuntimeLog.instance.info('App', '应用启动，版本 1.0.4.2-tavern（基于 1.0.4.1 MCP FishAudio）');
-      await initSpineFlutter(enableMemoryDebugging: false);
-      await Alarm.init();
-      await AndroidCompanionRuntime.instance.initialize();
-      await AudioPlayer.global.setAudioContext(
-        AudioContext(
-          android: const AudioContextAndroid(
-            // A single native owner coordinates focus for every app player.
-            audioFocus: AndroidAudioFocus.none,
-          ),
-          iOS: AudioContextIOS(
-            options: const {AVAudioSessionOptions.mixWithOthers},
+      await _optionalStep('RuntimeLog', RuntimeLog.instance.initialize);
+      RuntimeLog.instance.info(
+        'App',
+        '应用启动，版本 1.0.4.3-tavern（基于 1.0.4.1 MCP FishAudio）',
+      );
+      await _optionalStep(
+        'Spine',
+        () => initSpineFlutter(enableMemoryDebugging: false),
+      );
+      await _optionalStep('Alarm', Alarm.init);
+      await _optionalStep(
+        'Companion',
+        AndroidCompanionRuntime.instance.initialize,
+      );
+      await _optionalStep(
+        'AudioContext',
+        () => AudioPlayer.global.setAudioContext(
+          AudioContext(
+            android: const AudioContextAndroid(
+              // A single native owner coordinates focus for every app player.
+              audioFocus: AndroidAudioFocus.none,
+            ),
+            iOS: AudioContextIOS(
+              options: const {AVAudioSessionOptions.mixWithOthers},
+            ),
           ),
         ),
       );
-      final controller = await AppController.load();
-      await controller.initializeAlarmRuntime();
+      final controller = await AppController.load().timeout(
+        const Duration(seconds: 30),
+      );
+      await _optionalStep('AlarmRuntime', controller.initializeAlarmRuntime);
       if (controller.activeCharacterId == CharacterRuntimeIds.ryza) {
-        await LocalSkinStore.instance.initialize();
-        registerLocalSkinAppearances();
+        await _optionalStep('LocalSkins', () async {
+          await LocalSkinStore.instance.initialize();
+          registerLocalSkinAppearances();
+        });
       }
       if (mounted) {
         _controller?.removeListener(_handleControllerChanged);
         controller.addListener(_handleControllerChanged);
         setState(() => _controller = controller);
+        _readyWatchdog?.cancel();
+        _readyWatchdog = Timer(_readyWatchdogDuration, () {
+          if (_characterReady) return;
+          RuntimeLog.instance.warning('Startup', '角色舞台未报告就绪，超时后直接显示界面');
+          _handleCharacterReady();
+        });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) unawaited(requestCompanionNotificationPermissionOnce());
         });

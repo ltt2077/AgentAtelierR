@@ -1352,9 +1352,9 @@ class SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('AgentAtelierR 酒馆版'),
                   subtitle: Text(
                     language.text(
-                      '酒馆版 1.0.4.2-tavern（基于 1.0.4.1 MCP FishAudio）',
-                      'Tavern 1.0.4.2-tavern (based on 1.0.4.1 MCP FishAudio)',
-                      '酒場版 1.0.4.2-tavern（1.0.4.1 MCP FishAudio ベース）',
+                      '酒馆版 1.0.4.3-tavern（基于 1.0.4.1 MCP FishAudio）',
+                      'Tavern 1.0.4.3-tavern (based on 1.0.4.1 MCP FishAudio)',
+                      '酒場版 1.0.4.3-tavern（1.0.4.1 MCP FishAudio ベース）',
                     ),
                   ),
                 ),

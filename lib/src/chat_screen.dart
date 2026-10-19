@@ -685,6 +685,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       },
     );
     _syncCharacterAnimationPause();
+    if (_textFirstStage) {
+      // No Spine view or portrait will report readiness on the text-first
+      // stage, so release the bootstrap loader once the first frame is up.
+      // (1.0.4.2 missed this and stayed on "加载中" forever.)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onCharacterReady?.call();
+      });
+    }
     _audioPositionSubscription = _audioPlayer.onPositionChanged.listen(
       _updateLipSyncFromPlaybackPosition,
     );

@@ -1282,7 +1282,15 @@ class AppController extends ChangeNotifier {
       jsonEncode(controller.virtualPhoneCarrier.toJson()),
     );
     await controller.virtualPhoneWallpapers.load();
-    await controller.chatBackgrounds.load();
+    try {
+      // Optional tavern chat background: a broken or slow store falls back to
+      // the built-in background and must never hold up startup.
+      await controller.chatBackgrounds.load().timeout(
+        const Duration(seconds: 5),
+      );
+    } on Object catch (error, stackTrace) {
+      RuntimeLog.instance.error('ChatBackground', error, stackTrace);
+    }
     controller.frameRate.setMode(controller.frameRateMode, force: true);
     await controller._hydrateMessageAttachments();
     return controller;
