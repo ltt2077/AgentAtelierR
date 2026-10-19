@@ -630,7 +630,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   StreamIterator<String>? _replyIterator;
   // Start at the same minimum as the drag handle, regardless of saved text.
   // Sending a new message still restores automatic sizing below.
-  double? _manualPanelFraction = 0.22;
+  // Tavern text-first: there is no character to look at, so start with the
+  // conversation panel at its automatic (large) size instead.
+  double? _manualPanelFraction = _textFirstStage ? null : 0.22;
   double? _lockedPanelFraction;
   Size? _lastChatViewport;
   final List<ChatAttachment> _pendingAttachments = [];
