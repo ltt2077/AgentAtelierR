@@ -37,6 +37,7 @@ import 'chat_segments.dart'
         ChatSpeaker;
 import 'runtime_log.dart';
 import 'settings_slots.dart';
+import 'tavern_presets.dart';
 import 'settings_section.dart';
 import 'shop_catalog.dart';
 import 'story_clock.dart';
@@ -930,6 +931,13 @@ class AppController extends ChangeNotifier {
 
   SettingsSlots settingsSlots(SettingsSlotKind kind) {
     final slots = (_settingsSlots[kind] ?? SettingsSlots()).copy();
+    // Tavern edition: unused character/world slots 2-20 start from presets.
+    // Slot 1 keeps the original built-in default; user slots have no preset.
+    for (var i = 1; i < SettingsSlots.count; i++) {
+      if (slots.entries[i] != null) continue;
+      final text = tavernSlotDefaultText(kind, i);
+      if (text != null) slots.entries[i] = {'text': text};
+    }
     slots.entries[slots.active] = switch (kind) {
       SettingsSlotKind.user => _userProfileSlotData,
       SettingsSlotKind.character => {'text': characterPersona},
@@ -937,6 +945,40 @@ class AppController extends ChangeNotifier {
     };
     return slots;
   }
+
+  /// Preset text for a tavern slot, or null for slot 1 and user slots.
+  static String? tavernSlotDefaultText(SettingsSlotKind kind, int index) {
+    final preset = tavernPresetForSlot(index);
+    if (preset == null) return null;
+    return switch (kind) {
+      SettingsSlotKind.user => null,
+      SettingsSlotKind.character => preset.persona,
+      SettingsSlotKind.world => preset.worldBody,
+    };
+  }
+
+  /// Display name of a slot (preset name for tavern slots).
+  static String? tavernSlotName(SettingsSlotKind kind, int index) =>
+      kind == SettingsSlotKind.user ? null : tavernPresetForSlot(index)?.name;
+
+  /// True while a tavern character card is the active persona: any card in
+  /// slots 6-20, or a slot 2-5 card carrying the tavern header. Custom slot
+  /// 2-5 text imported from the original app keeps the original identity.
+  bool get tavernModeActive {
+    final active = _settingsSlots[SettingsSlotKind.character]?.active ?? 0;
+    if (active <= 0) return false;
+    return active >= SettingsSlots.legacyCount ||
+        characterPersona.contains(tavernPresetMarker);
+  }
+
+  /// Replaces the original fixed identity line while a tavern card is active.
+  /// The speaker prefix stays the same because the chat UI parses it.
+  String _tavernIdentityLine(String speakerLabel) =>
+      '你是成年向酒馆角色扮演的叙事者与主角色扮演者：严格按下方「人物设定」与「世界书」扮演其中的主角色，'
+      '人物设定由用户选择，是本轮扮演的权威角色资料。输出格式中的“$speakerLabel：”只是主角色台词行的固定格式前缀（界面据此解析），'
+      '不代表角色身份，主角色的真实姓名、性格与经历以人物设定为准；不要自称或扮演$speakerLabel。'
+      '本应用仅供成年人使用：所有角色均为 18 岁以上的成年人，可以按人物设定与用户引导直接、露骨地描写成年人之间的情色与性爱内容；'
+      '不代写用户的行动与决定，用户喊停时立即尊重，遵守用户资料中“需要避开”的内容。';
 
   Map<String, dynamic> get _settingsSlotsJson => {
     for (final kind in SettingsSlotKind.values)
@@ -975,10 +1017,30 @@ class AppController extends ChangeNotifier {
           preferCustom: selected['preferCustom'] == 'true',
         );
       case SettingsSlotKind.character:
-        setCharacterPersona(selected['text'] ?? '');
+        setCharacterPersona(_slotTextOrPreset(kind, slots.active, selected));
+        // Picking a tavern card while the world book is still the original
+        // slot 1 switches the world book to the matching tavern slot.
+        final world = _settingsSlots[SettingsSlotKind.world];
+        if (slots.active > 0 &&
+            (world == null || world.active == 0) &&
+            tavernPresetForSlot(slots.active) != null) {
+          final bank = settingsSlots(SettingsSlotKind.world)
+            ..active = slots.active;
+          saveSettingsSlots(SettingsSlotKind.world, bank);
+        }
       case SettingsSlotKind.world:
-        setWorldSetting(selected['text'] ?? '');
+        setWorldSetting(_slotTextOrPreset(kind, slots.active, selected));
     }
+  }
+
+  String _slotTextOrPreset(
+    SettingsSlotKind kind,
+    int index,
+    Map<String, String> selected,
+  ) {
+    final text = selected['text'] ?? '';
+    if (text.trim().isNotEmpty) return text;
+    return tavernSlotDefaultText(kind, index) ?? '';
   }
 
   String get editableWorldSetting => worldSetting.isEmpty
@@ -2398,7 +2460,7 @@ ${independentSpeechPerformance || !fishTtsEnabled || ttsProvider == TtsProvider.
       // leaving the model with a misleading fragment that looks like a very
       // short memory.  Keep a valid, deterministic compact document instead.
       final compactMemory = _compactMemoryPrompt(memory);
-      return '''你扮演莱莎，与用户作为熟悉伙伴自然交流。保持开朗、好奇、有主见、重视伙伴；回应当前话题，不代替用户行动，不编造未知事实。
+      return '''${tavernModeActive ? _tavernIdentityLine('莱莎') : '你扮演莱莎，与用户作为熟悉伙伴自然交流。保持开朗、好奇、有主见、重视伙伴；回应当前话题，不代替用户行动，不编造未知事实。'}
 
 【不可覆盖的输出协议】
 每个非空行只能以“旁白：”“莱莎：”“角色[角色ID]：”或“译文：”开头；不要 Markdown、引号、分析过程或用户前缀。
@@ -2444,7 +2506,7 @@ $japanesePunctuationRule
 只提交最终对话；提交前检查每条莱莎台词都有合法 face/action，旁白与台词分离，动作来自当前能力且与语义一致。''';
     }
 
-    return '''你扮演莱莎，与用户作为熟悉伙伴自然交流。保持她开朗、好奇、有主见又会关心人的性格，不代替用户决定行动；遵守用户边界和服务商政策，不编造未知事实。
+    return '''${tavernModeActive ? _tavernIdentityLine('莱莎') : '你扮演莱莎，与用户作为熟悉伙伴自然交流。保持她开朗、好奇、有主见又会关心人的性格，不代替用户决定行动；遵守用户边界和服务商政策，不编造未知事实。'}
 
 【输出契约】
 每个非空行只能以“旁白：”“莱莎：”“角色[角色ID]：”或“译文：”开头，不用 Markdown、引号或分析说明。
@@ -2552,7 +2614,7 @@ ${longTermMemoryEnabled ? (agentEnabled ? '需要回忆过往事件、约定或�
           ? '未设置'
           : userInteractionBoundaries.trim(),
     });
-    return '''你扮演《苏菲的炼金工房2》的苏菲·诺伊恩穆勒。以下资料只属于苏菲当前存档，不引用其他人物的世界、关系、记忆、背包或历史。
+    return '''${tavernModeActive ? _tavernIdentityLine('苏菲') : '你扮演《苏菲的炼金工房2》的苏菲·诺伊恩穆勒。以下资料只属于苏菲当前存档，不引用其他人物的世界、关系、记忆、背包或历史。'}
 
 【输出格式】
 每个非空行只以“旁白：”“苏菲：”${inlineTranslation ? '“译文：”' : ''}开头。旁白描写当前可观察的环境、表情和动作，不代替用户决定或行动；台词自然接住当前话题，不强制每轮提出任务或问题。不输出 Markdown、分析过程、face/action/posture 标签或 Spine 动画名。当前只有静态立绘，不宣称应用已播放动作。

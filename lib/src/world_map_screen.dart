@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'optional_assets.dart';
 import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
@@ -402,8 +403,14 @@ class WorldMapScreen extends StatefulWidget {
 
   static Future<WorldMapData> _loadData() async {
     final files = await Future.wait([
-      rootBundle.loadString('assets/world_map/world_hierarchy.json'),
-      rootBundle.loadString('assets/world_map/npc_placement.json'),
+      loadOptionalBundledText(
+        'assets/world_map/world_hierarchy.json',
+        '{"areas":[]}',
+      ),
+      loadOptionalBundledText(
+        'assets/world_map/npc_placement.json',
+        '{"npcs":[]}',
+      ),
     ]);
     final worldJson = jsonDecode(files[0]) as Map<String, dynamic>;
     final npcJson = jsonDecode(files[1]) as Map<String, dynamic>;

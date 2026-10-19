@@ -1,0 +1,54 @@
+# AgentAtelierR 酒馆版：Windows 构建（Linux 上无法构建 Windows 桌面版）。
+# 只使用公开源码：spine_flutter 从 pub.dev 下载并打补丁，私有人物素材不参与构建。
+name: Tavern Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tavern]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare public build (Spine runtime + asset dirs)
+        run: python tool/prepare_public_build.py
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build Windows release
+        run: flutter build windows --release --no-pub --dart-define=AAR_CHARACTER_ASSET_KEY=tavern-public-build
+
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          Copy-Item README_TAVERN.md "$release/README_TAVERN.md"
+          Compress-Archive -Path "$release/*" -DestinationPath AgentAtelierR-Tavern-windows-x64.zip
+          Get-FileHash AgentAtelierR-Tavern-windows-x64.zip -Algorithm SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentAtelierR-Tavern-windows-x64
+          path: AgentAtelierR-Tavern-windows-x64.zip
+          retention-days: 30

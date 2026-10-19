@@ -1,4 +1,5 @@
 import java.util.Base64
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -16,7 +17,19 @@ val relayPushDefines = (project.findProperty("dart-defines") as? String)
         if (parts?.size == 2 && parts[0].startsWith("RELAY_")) parts[0] to parts[1] else null
     }?.toMap() ?: emptyMap()
 
+// Tavern edition release signing. A local key.properties (git-ignored) or the
+// TAVERN_* environment variables (GitHub Actions secrets) point to a keystore
+// that is never committed. Without either, release falls back to debug keys.
+val tavernSigning = Properties().apply {
+    val file = rootProject.file("key.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+fun tavernSigningValue(key: String, env: String): String? =
+    tavernSigning.getProperty(key) ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+val tavernStoreFile = tavernSigningValue("storeFile", "TAVERN_STORE_FILE")
+
 android {
+    // Kotlin/R namespace is unchanged; only the installed applicationId differs.
     namespace = "com.example.ryza_chat_mvp"
     compileSdk = 37
     // Use the highest NDK required by the native Flutter plugins.
@@ -29,7 +42,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.ryza_chat_mvp"
+        // Tavern edition: a distinct id so it installs alongside the original.
+        applicationId = "com.ltt2077.agentatelierr.tavern"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -41,7 +55,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         // Public release uses four segments; pubspec keeps Flutter's semver.
-        versionName = "1.0.4.1"
+        versionName = "1.0.4.1-tavern"
         if (relayPushDefines["RELAY_PUSH_PROVIDER"] == "fcm") {
             mapOf(
                 "google_api_key" to "RELAY_FCM_API_KEY",
@@ -56,11 +70,24 @@ android {
         }
     }
 
+    signingConfigs {
+        if (tavernStoreFile != null) {
+            create("tavern") {
+                storeFile = file(tavernStoreFile)
+                storePassword = tavernSigningValue("storePassword", "TAVERN_STORE_PASSWORD")
+                keyAlias = tavernSigningValue("keyAlias", "TAVERN_KEY_ALIAS")
+                keyPassword = tavernSigningValue("keyPassword", "TAVERN_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (tavernStoreFile != null) {
+                signingConfigs.getByName("tavern")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

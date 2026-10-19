@@ -73,7 +73,9 @@ class FishMcpService extends ChangeNotifier {
   static final FishMcpService instance = FishMcpService._();
 
   static const endpoint = 'https://api.fish.audio/mcp';
-  static const callbackUri = 'fishmcp://oauth/callback';
+  // Tavern edition: own URL scheme so OAuth callbacks never reach the original app.
+  static const callbackScheme = 'fishmcptavern';
+  static const callbackUri = '$callbackScheme://oauth/callback';
   static const _storage = FlutterSecureStorage(aOptions: AndroidOptions());
   static const _credentialKey = 'fish_mcp_oauth_v1';
   static const _clientIdKey = 'fish_mcp_client_id_v1';
@@ -483,7 +485,7 @@ class FishMcpService extends ChangeNotifier {
   /// reconnects with the persisted access token. The verifier and state stay
   /// in memory only and are never written to logs or ordinary backups.
   Future<void> handleRedirectUri(Uri uri) async {
-    if (uri.scheme != 'fishmcp' || uri.host != 'oauth') return;
+    if (uri.scheme != callbackScheme || uri.host != 'oauth') return;
     final code = uri.queryParameters['code'];
     final stateValue = uri.queryParameters['state'];
     final error = uri.queryParameters['error'];
@@ -1047,7 +1049,7 @@ class FishMcpService extends ChangeNotifier {
       Uri.parse(_registerEndpoint),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'client_name': 'AgentAtelierR',
+        'client_name': 'AgentAtelierR Tavern',
         'redirect_uris': [callbackUri],
         'grant_types': ['authorization_code', 'refresh_token'],
         'response_types': ['code'],

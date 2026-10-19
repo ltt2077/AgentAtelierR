@@ -1,0 +1,255 @@
+{
+  "format": "agent-atelier-r-local-backup",
+  "version": 1,
+  "characterId": "ryza",
+  "exportedAt": "2026-10-19T12:11:06.970276",
+  "messages": [
+    {
+      "text": "你来了！今天想聊什么？也可以点点我试试看。",
+      "isUser": false
+    }
+  ],
+  "memorySummary": "",
+  "recentMemories": [],
+  "recentMemoryCheckpoints": [],
+  "lastRecentMemoryMessageId": null,
+  "longTermMemoryConsolidatedCount": 0,
+  "memoryEditRevision": 0,
+  "characterState": {
+    "values": {
+      "mood": 0,
+      "energy": 65,
+      "closeness": 40,
+      "curiosity": 50
+    },
+    "bands": {
+      "mood": 1,
+      "energy": 1,
+      "closeness": 1,
+      "curiosity": 1
+    },
+    "delta": {
+      "mood": 0,
+      "energy": 0,
+      "closeness": 0,
+      "curiosity": 0
+    },
+    "emotion": "neutral",
+    "reason": "",
+    "updatedAt": null,
+    "settled": []
+  },
+  "virtualPhoneCarrier": {
+    "region": "库肯岛",
+    "suffix": "联通"
+  },
+  "npcChats": {
+    "version": 1,
+    "threads": {},
+    "contacts": []
+  },
+  "settingsSlots": {
+    "user": {
+      "active": 0,
+      "entries": [
+        {
+          "address": "旧版称呼",
+          "portrait": "",
+          "relationshipRole": "familiarPartner",
+          "interactionStyle": "balanced",
+          "relationshipCustom": "",
+          "interactionCustom": "",
+          "preferCustom": "false",
+          "boundaries": ""
+        },
+        null,
+        {
+          "address": "旧版槽位3称呼",
+          "portrait": "旧版自画像",
+          "relationshipRole": "adventureCompanion",
+          "interactionStyle": "lively",
+          "relationshipCustom": "",
+          "interactionCustom": "",
+          "preferCustom": "false",
+          "boundaries": ""
+        },
+        null,
+        null
+      ]
+    },
+    "character": {
+      "active": 4,
+      "entries": [
+        {
+          "text": "旧版槽位1人物"
+        },
+        {
+          "text": "旧版槽位2人物"
+        },
+        null,
+        null,
+        {
+          "text": "旧版槽位5人物"
+        }
+      ]
+    },
+    "world": {
+      "active": 3,
+      "entries": [
+        {
+          "text": "旧版槽位1世界"
+        },
+        null,
+        null,
+        {
+          "text": "旧版槽位4世界"
+        },
+        null
+      ]
+    }
+  },
+  "userProfile": {
+    "address": "旧版称呼",
+    "portrait": "",
+    "relationshipRole": "familiarPartner",
+    "interactionStyle": "balanced",
+    "relationshipCustom": "",
+    "interactionCustom": "",
+    "preferCustom": "false",
+    "boundaries": ""
+  },
+  "characterMood": "neutral",
+  "relationshipPoints": 0,
+  "preciousItems": {},
+  "sceneTime": "afternoon",
+  "automaticSceneTime": true,
+  "storyClockEnabled": false,
+  "storyClock": {
+    "totalMinutes": 540,
+    "satiety": 80,
+    "settledTurns": []
+  },
+  "lastAtelierFoodDay": 0,
+  "voiceEnabled": true,
+  "voiceVolume": 0.85,
+  "bgmEnabled": false,
+  "bgmVolume": 0.35,
+  "ambientEnabled": false,
+  "ambientVolume": 0.45,
+  "liquidGlassChatUi": false,
+  "pauseCharacterAnimationOnFullscreenPages": true,
+  "showMicrophoneButton": false,
+  "unlockInputWhileReplying": false,
+  "frameRateMode": "adaptive",
+  "themePreference": "system",
+  "accentTheme": "jade",
+  "textColorTheme": null,
+  "textColorChoice": "theme",
+  "dialogueFontScale": 1.0,
+  "translationOnly": false,
+  "independentTranslation": true,
+  "preferCustomUserProfile": false,
+  "interfaceLanguage": "chinese",
+  "narratorLanguage": "chinese",
+  "characterReplyLanguage": "chinese",
+  "translationLanguage": "none",
+  "npcReplyLanguageOverride": null,
+  "npcTranslationLanguageOverride": null,
+  "selectedAreaId": "area_01",
+  "selectedStageId": "stage_01_002_01",
+  "selectedAreaName": "库肯岛周边地域",
+  "selectedStageName": "小妖精之森・隐居处前",
+  "selectedCharacterAppearanceId": "seated_01",
+  "progress": {
+    "characterTouchCount": 0,
+    "userMessageCount": 0,
+    "mapVisitCount": 0,
+    "travelCount": 0,
+    "sceneChangeCount": 0,
+    "gatherCount": 0,
+    "synthesisCount": 0,
+    "storyQuestIndex": 0,
+    "storyQuestBaseline": 0,
+    "stars": 0,
+    "claimedMissionIds": []
+  },
+  "dynamicQuests": [],
+  "alchemy": {
+    "version": 4,
+    "inventory": [],
+    "history": [],
+    "gatherAvailableAtByStage": {}
+  },
+  "preferences": {
+    "aiEnabled": false,
+    "llmProvider": "openAiCompatible",
+    "openAiBaseUrl": "https://api.openai.com/v1",
+    "openAiModel": "gpt-4.1-mini",
+    "openAiConfigurations": {
+      "active": 0,
+      "entries": [
+        {
+          "baseUrl": "https://api.openai.com/v1",
+          "model": "gpt-4.1-mini"
+        },
+        null,
+        null
+      ]
+    },
+    "geminiBaseUrl": "https://generativelanguage.googleapis.com/v1beta/interactions",
+    "geminiModel": "gemini-3.8-flash",
+    "openAiAdvancedEnabled": false,
+    "openAiReasoningEffort": "medium",
+    "openAiOutputMultiplier": 1.0,
+    "agentEnabled": false,
+    "characterPersonaInjectionEnabled": true,
+    "worldSettingInjectionEnabled": true,
+    "characterPersona": "旧版槽位5人物",
+    "worldSetting": "旧版槽位4世界",
+    "llmContextCompatibility": false,
+    "npcInteractionFrequency": "normal",
+    "fishTtsEnabled": false,
+    "ttsStereoEnabled": false,
+    "ttsStereoPosition": "center",
+    "independentSpeechPerformance": true,
+    "backgroundVoicePlayback": true,
+    "ttsProvider": "fishAudio",
+    "fishAudioModel": "s2-pro",
+    "fishAudioBaseUrl": "https://api.fish.audio/v1/tts",
+    "fishAudioReferenceId": "",
+    "fishAudioAsmrReferenceId": "c5de0b3f9ac54e08b21fb63120e4ebdb",
+    "fishAudioFormat": "mp3",
+    "fishAudioLatency": "normal",
+    "fishAudioSpeed": 1.0,
+    "fishMcpModel": "",
+    "fishMcpVoice": "",
+    "fishMcpAsmrVoice": "",
+    "fishMcpAutoFallback": false,
+    "dashScopeTtsBaseUrl": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    "dashScopeTtsModel": "qwen3-tts-flash",
+    "dashScopeTtsVoice": "Cherry",
+    "dashScopeTtsAsmrVoice": "",
+    "dashScopeTtsLanguage": "Chinese",
+    "dashScopeTtsInstructions": "",
+    "genericTtsBaseUrl": "https://api.openai.com/v1",
+    "genericTtsModel": "gpt-4o-mini-tts",
+    "genericTtsVoice": "alloy",
+    "genericTtsAsmrVoice": "",
+    "mimoTts": {
+      "baseUrl": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.5-tts-voiceclone",
+      "voice": "mimo_default",
+      "referenceName": "",
+      "instructions": "",
+      "asmrInstructions": "近距离轻声耳语，气息柔和，降低音量，语速稍慢。保持原音色，避免突然提高音量。"
+    },
+    "localTtsVoiceProfileId": "",
+    "asmrModeEnabled": false,
+    "ttsVoiceMode": "normal",
+    "ttsEmotionIntensity": "natural",
+    "ttsCueDensity": "normal",
+    "ttsPreviewText": "你好！今天也一起去寻找有趣的炼金素材吧！",
+    "longTermMemoryEnabled": true,
+    "memoryConsolidationPrompt": ""
+  }
+}

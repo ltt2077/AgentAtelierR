@@ -1329,7 +1329,7 @@ class SettingsScreenState extends State<SettingsScreen> {
                 _SectionLabel(language.text('关于', 'About', 'このアプリについて')),
                 ListTile(
                   leading: const Icon(Icons.info_outline),
-                  title: const Text('AgentAtelierR'),
+                  title: const Text('AgentAtelierR 酒馆版'),
                   subtitle: Text(
                     language.text(
                       '版本 1.0.4.1 MCP FishAudio',

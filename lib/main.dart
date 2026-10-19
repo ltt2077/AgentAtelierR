@@ -163,7 +163,7 @@ class _BootstrapAppState extends State<_BootstrapApp> {
     final controller = _controller;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'AgentAtelierR',
+      title: 'AgentAtelierR 酒馆版',
       builder: (context, child) => GlassStyleScope(
         enabled: controller?.liquidGlassChatUi ?? false,
         child: child!,

@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'optional_assets.dart';
 
-import 'package:flutter/services.dart';
 
 import 'app_localization.dart';
 import 'character_identity.dart';
@@ -138,8 +138,14 @@ class CharacterCatalog {
 
   static Future<CharacterCatalog> load() async {
     final files = await Future.wait([
-      rootBundle.loadString('assets/data/runtime_prompts.json'),
-      rootBundle.loadString('assets/world_map/npc_placement.json'),
+      loadOptionalBundledText(
+        'assets/data/runtime_prompts.json',
+        '{"characters":{}}',
+      ),
+      loadOptionalBundledText(
+        'assets/world_map/npc_placement.json',
+        '{"npcs":[]}',
+      ),
     ]);
     final runtime = jsonDecode(files[0]) as Map<String, dynamic>;
     final placement = jsonDecode(files[1]) as Map<String, dynamic>;

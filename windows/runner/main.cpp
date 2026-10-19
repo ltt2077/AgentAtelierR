@@ -11,12 +11,12 @@
 namespace {
 void RegisterFishMcpProtocol() {
   HKEY scheme_key = nullptr;
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\fishmcp", 0,
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\fishmcptavern", 0,
                       nullptr, 0, KEY_SET_VALUE, nullptr, &scheme_key,
                       nullptr) != ERROR_SUCCESS) {
     return;
   }
-  const wchar_t url_protocol[] = L"URL:Fish MCP";
+  const wchar_t url_protocol[] = L"URL:Fish MCP (Tavern)";
   RegSetValueExW(scheme_key, nullptr, 0, REG_SZ,
                  reinterpret_cast<const BYTE*>(url_protocol),
                  sizeof(url_protocol));
@@ -70,7 +70,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   // Keep the desktop window in the same portrait ratio as the mobile UI.
   Win32Window::Size size(540, 960);
-  if (!window.Create(L"AgentAtelierR", origin, size)) {
+  if (!window.Create(L"AgentAtelierR \u9152\u9986\u7248", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

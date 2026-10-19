@@ -86,13 +86,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "AgentAtelierR" "\0"
+            VALUE "CompanyName", "ltt2077.tavern" "\0"
+            VALUE "FileDescription", "AgentAtelierR 酒馆版" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "AgentAtelierR" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "AgentAtelierR.exe" "\0"
-            VALUE "ProductName", "AgentAtelierR" "\0"
+            VALUE "InternalName", "AgentAtelierRTavern" "\0"
+            VALUE "LegalCopyright", "Based on AgentAtelierR by onion-aqua. Tavern edition by ltt2077." "\0"
+            VALUE "OriginalFilename", "AgentAtelierRTavern.exe" "\0"
+            VALUE "ProductName", "AgentAtelierR Tavern" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

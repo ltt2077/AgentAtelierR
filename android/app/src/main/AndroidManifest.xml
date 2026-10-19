@@ -18,7 +18,7 @@
     <application
         android:fullBackupContent="@xml/relay_backup_rules"
         android:dataExtractionRules="@xml/relay_data_extraction_rules"
-        android:label="AgentAtelierR"
+        android:label="AgentAtelierR 酒馆版"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
@@ -66,7 +66,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="fishmcp" android:host="oauth" />
+                <data android:scheme="fishmcptavern" android:host="oauth" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

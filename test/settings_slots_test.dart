@@ -21,7 +21,7 @@ void main() {
       final controller = await AppController.load();
       addTearDown(controller.dispose);
       final user = controller.settingsSlots(SettingsSlotKind.user);
-      expect(user.entries.length, 5);
+      expect(user.entries.length, SettingsSlots.count);
       expect(user.entries.first?['address'], '原来的称呼');
       expect(user.entries.skip(1), everyElement(isNull));
       user.entries[4] = {
@@ -105,7 +105,7 @@ void main() {
         ],
       });
       expect(slots.active, 4);
-      expect(slots.entries.length, 5);
+      expect(slots.entries.length, SettingsSlots.count);
       expect(slots.entries[0], isNull);
       expect(slots.entries[2], isEmpty);
     },

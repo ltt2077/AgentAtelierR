@@ -22,9 +22,13 @@ class CharacterPromptEditor extends StatefulWidget {
 class _CharacterPromptEditorState extends State<CharacterPromptEditor> {
   SettingsSlotKind get _kind =>
       widget.world ? SettingsSlotKind.world : SettingsSlotKind.character;
-  String get _defaultText => widget.world
-      ? widget.controller.activeCharacterProfile.defaultWorldSetting
-      : widget.controller.activeCharacterProfile.defaultPersona;
+  // Tavern edition: slot 1 defaults to the original built-in text; slots
+  // 2-20 default to their tavern preset.
+  String get _defaultText =>
+      AppController.tavernSlotDefaultText(_kind, _slots.active) ??
+      (widget.world
+          ? widget.controller.activeCharacterProfile.defaultWorldSetting
+          : widget.controller.activeCharacterProfile.defaultPersona);
   late final _slots = widget.controller.settingsSlots(_kind);
   late final _text = TextEditingController(
     text: widget.world
@@ -172,6 +176,10 @@ class _CharacterPromptEditorState extends State<CharacterPromptEditor> {
                     SettingsSlotSelector(
                       slots: _slots,
                       language: language,
+                      names: [
+                        for (var i = 0; i < SettingsSlots.count; i++)
+                          AppController.tavernSlotName(_kind, i),
+                      ],
                       onSelected: _selectSlot,
                     ),
                     GlassSurface(

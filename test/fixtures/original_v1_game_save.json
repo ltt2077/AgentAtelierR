@@ -1,0 +1,117 @@
+{
+  "format": "agent-atelier-r-save-slot",
+  "version": 1,
+  "savedAt": "2026-10-19T12:11:06.983696",
+  "location": "库肯岛周边地域 / 小妖精之森・隐居处前",
+  "messageCount": 1,
+  "preview": "你来了！今天想聊什么？也可以点点我试试看。",
+  "snapshot": {
+    "characterId": "ryza",
+    "roleSettings": {
+      "userProfile": {
+        "address": "旧版称呼",
+        "portrait": "",
+        "relationshipRole": "familiarPartner",
+        "interactionStyle": "balanced",
+        "relationshipCustom": "",
+        "interactionCustom": "",
+        "preferCustom": "false",
+        "boundaries": ""
+      },
+      "activeSlots": {
+        "user": 0,
+        "character": 4,
+        "world": 3
+      },
+      "characterPersona": "旧版槽位5人物",
+      "worldSetting": "旧版槽位4世界",
+      "characterPersonaInjectionEnabled": true,
+      "worldSettingInjectionEnabled": true
+    },
+    "format": "agent-atelier-r-game-save",
+    "version": 1,
+    "messages": [
+      {
+        "text": "你来了！今天想聊什么？也可以点点我试试看。",
+        "isUser": false
+      }
+    ],
+    "memorySummary": "",
+    "recentMemories": [],
+    "recentMemoryCheckpoints": [],
+    "lastRecentMemoryMessageId": null,
+    "longTermMemoryConsolidatedCount": 0,
+    "memoryEditRevision": 0,
+    "characterState": {
+      "values": {
+        "mood": 0,
+        "energy": 100,
+        "closeness": 0,
+        "curiosity": 20
+      },
+      "bands": {
+        "mood": 1,
+        "energy": 2,
+        "closeness": 0,
+        "curiosity": 0
+      },
+      "delta": {
+        "mood": 0,
+        "energy": 0,
+        "closeness": 0,
+        "curiosity": 0
+      },
+      "emotion": "neutral",
+      "reason": "",
+      "updatedAt": null,
+      "settled": []
+    },
+    "virtualPhoneCarrier": {
+      "region": "库肯岛",
+      "suffix": "联通"
+    },
+    "npcChats": {
+      "version": 1,
+      "threads": {},
+      "contacts": []
+    },
+    "characterMood": "neutral",
+    "relationshipPoints": 0,
+    "preciousItems": {},
+    "sceneTime": "afternoon",
+    "automaticSceneTime": true,
+    "storyClockEnabled": false,
+    "storyClock": {
+      "totalMinutes": 540,
+      "satiety": 80,
+      "settledTurns": []
+    },
+    "lastAtelierFoodDay": 0,
+    "selectedAreaId": "area_01",
+    "selectedStageId": "stage_01_002_01",
+    "selectedAreaName": "库肯岛周边地域",
+    "selectedStageName": "小妖精之森・隐居处前",
+    "selectedCharacterAppearanceId": "seated_01",
+    "progress": {
+      "characterTouchCount": 0,
+      "userMessageCount": 0,
+      "mapVisitCount": 0,
+      "travelCount": 0,
+      "sceneChangeCount": 0,
+      "gatherCount": 0,
+      "synthesisCount": 0,
+      "storyQuestIndex": 0,
+      "storyQuestBaseline": 0,
+      "stars": 0,
+      "claimedMissionIds": []
+    },
+    "dynamicQuests": [],
+    "alchemy": {
+      "version": 4,
+      "inventory": [],
+      "history": [],
+      "gatherAvailableAtByStage": {}
+    }
+  },
+  "name": "旧版存档"
+}

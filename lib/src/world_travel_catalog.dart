@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'optional_assets.dart';
 
-import 'package:flutter/services.dart';
 
 import 'app_localization.dart';
 import 'world_map_localization.dart';
@@ -74,8 +74,9 @@ class WorldTravelCatalog {
   final List<WorldTravelDestination> destinations;
 
   static Future<WorldTravelCatalog> load() async {
-    final raw = await rootBundle.loadString(
+    final raw = await loadOptionalBundledText(
       'assets/world_map/world_hierarchy.json',
+      '{"areas":[]}',
     );
     final root = jsonDecode(raw) as Map<String, dynamic>;
     final destinations = <WorldTravelDestination>[];
