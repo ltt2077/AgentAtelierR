@@ -82,7 +82,7 @@ flutter build apk --release --no-pub --dart-define=AAR_CHARACTER_ASSET_KEY=taver
 flutter build windows --release --no-pub --dart-define=AAR_CHARACTER_ASSET_KEY=tavern-public-build
 ```
 
-Windows 的 GitHub Actions 工作流模板放在 `ci/tavern-windows.yml`。复制到 `.github/workflows/` 后，推送 `tavern` 分支或手动触发时就会构建 Windows ZIP。（推送 workflow 文件需要 token 带 `workflow` 权限，所以暂时没有放进 `.github/`。）手头有原版私有素材的话，也可以继续用原版的 `tool/build_protected.ps1`。
+GitHub Actions 工作流 `.github/workflows/tavern-windows.yml` 会在推送 `tavern` 分支或手动触发时构建 Windows ZIP。手头有原版私有素材的话，也可以继续用原版的 `tool/build_protected.ps1`。
 
 **签名**：以后更新酒馆版必须用同一个 keystore 签名，否则无法覆盖升级。请备份好 keystore 和密码。
 
