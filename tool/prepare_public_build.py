@@ -62,7 +62,25 @@ def create_asset_dirs() -> None:
     print(f'Asset directories ready ({created} created).')
 
 
+def windows_icon() -> None:
+    # *.ico is git-ignored upstream; generate it from the tracked PNG source.
+    icon = ROOT / 'windows' / 'runner' / 'resources' / 'app_icon.ico'
+    if icon.exists():
+        return
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        print('Pillow missing; skip Windows icon (pip install pillow).')
+        return
+    source = Image.open(ROOT / 'assets/branding/app_icon_source.png').convert('RGBA')
+    square = ImageOps.fit(source, (256, 256), Image.Resampling.LANCZOS)
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    square.save(icon, sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
+    print(f'Generated {icon}')
+
+
 if __name__ == '__main__':
+    windows_icon()
     fetch_spine()
     patch_spine()
     create_asset_dirs()
