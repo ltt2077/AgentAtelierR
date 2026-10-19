@@ -26,7 +26,11 @@ class VirtualPhoneWallpaperPage extends StatefulWidget {
     required this.language,
     this.imagePicker,
     this.liquidGlass = false,
+    this.title,
   });
+
+  /// Tavern edition: the page also manages chat backgrounds.
+  final String? title;
 
   final VirtualPhoneWallpaperStore store;
   final AppLanguage language;
@@ -320,7 +324,8 @@ class _VirtualPhoneWallpaperPageState extends State<VirtualPhoneWallpaperPage> {
                         '${_toDelete.length} selected',
                         '${_toDelete.length} 枚選択',
                       )
-                    : _language.text('手机壁纸', 'Wallpaper', '壁紙'),
+                    : widget.title ??
+                          _language.text('手机壁纸', 'Wallpaper', '壁紙'),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 18),
@@ -356,9 +361,9 @@ class _VirtualPhoneWallpaperPageState extends State<VirtualPhoneWallpaperPage> {
                           padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
                           child: Text(
                             _language.text(
-                              '选择要删除的导入壁纸，默认三张壁纸无法删除。',
-                              'Select imported wallpapers to delete. The three default wallpapers are protected.',
-                              '追加した壁紙を選んで削除できます。標準の3枚は削除できません。',
+                              '选择要删除的导入图片，默认图片无法删除。',
+                              'Select imported images to delete. Default images are protected.',
+                              '追加した画像を選んで削除できます。標準の画像は削除できません。',
                             ),
                             style: TextStyle(
                               color: colors.onSurfaceVariant,

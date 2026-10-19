@@ -123,3 +123,7 @@ downloaded_skin_resources/
 # Local source snapshots kept outside release commits.
 lib/src/app_controller.dart.pre_action_fix
 lib/src/chat_screen.dart.backup
+
+# Tavern edition: original default chat background (generated, CC0).
+!assets/tavern/
+!assets/tavern/default_background.jpg

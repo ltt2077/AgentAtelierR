@@ -29,6 +29,7 @@ import 'motion_recipe.dart';
 import 'motion_playback_timing.dart';
 import 'speech_planner.dart';
 import 'speech_performance_dispatch.dart';
+import 'tavern_chat_background.dart';
 import 'app_controller.dart';
 import 'conversation_collection_store.dart';
 import 'conversation_motion_policy.dart';
@@ -316,7 +317,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _staticPortraitReady = false;
   CharacterRuntimeProfile get _activeCharacterProfile =>
       characterRuntimeProfileById(_activeCharacterId);
+
+  /// Tavern edition: text-first main screen. The Spine character stage,
+  /// scene animation and loading panel are not built; every character uses
+  /// the existing static (no-resource) path, so performance tags fall back
+  /// to action:none and all other features keep working.
+  static const _textFirstStage = true;
+
   bool get _usesProtectedSpine =>
+      !_textFirstStage &&
       _activeCharacterProfile.renderMode == CharacterRenderMode.protectedSpine;
   Timer? _idleTimer;
   Timer? _tapReactionTimer;
@@ -6593,7 +6602,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 left: 0,
                 right: 0,
                 height: viewportConstraints.maxHeight,
-                child: _usesProtectedSpine
+                child: _textFirstStage
+                    ? TavernChatBackground(
+                        store: widget.controller.chatBackgrounds,
+                      )
+                    : _usesProtectedSpine
                     ? _SceneBackground(
                         sceneTime: widget.controller.sceneTime,
                         stageId: widget.controller.selectedStageId,
@@ -6647,11 +6660,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final viewportChanged =
         _lastChatViewport != null && _lastChatViewport != viewport;
     _lastChatViewport = viewport;
-    final automaticFraction = _automaticPanelFraction(
-      constraints.maxWidth,
-      constraints.maxHeight,
-      isWide,
-    );
+    // Text-first: with no character stage the conversation panel starts at
+    // its largest regular size; dragging and fullscreen still work.
+    final automaticFraction = _textFirstStage
+        ? 0.68
+        : _automaticPanelFraction(
+            constraints.maxWidth,
+            constraints.maxHeight,
+            isWide,
+          );
     final panelFraction =
         _lockedPanelFraction ?? _manualPanelFraction ?? automaticFraction;
     final panelBounds = conversationPanelBounds(
@@ -6672,7 +6689,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             Expanded(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1120),
-                child: _buildCharacter(),
+                child: _textFirstStage
+                    ? const SizedBox.shrink()
+                    : _buildCharacter(),
               ),
             ),
           ],

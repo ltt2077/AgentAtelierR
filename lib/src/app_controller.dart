@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -569,6 +570,23 @@ class AppController extends ChangeNotifier {
   final SharedPreferences _preferences;
   late final VirtualPhoneWallpaperStore virtualPhoneWallpapers =
       VirtualPhoneWallpaperStore(preferences: _preferences);
+
+  /// Tavern edition: text-first chat background (default image or an
+  /// imported copy). Same import/resize pipeline as the phone wallpapers.
+  static const chatBackgroundBuiltIns = <VirtualPhoneWallpaper>[
+    VirtualPhoneWallpaper(
+      id: 'tavern-default',
+      name: '酒馆夜色',
+      assetPath: 'assets/tavern/default_background.jpg',
+    ),
+  ];
+  late final VirtualPhoneWallpaperStore chatBackgrounds =
+      VirtualPhoneWallpaperStore(
+        preferences: _preferences,
+        preferenceKey: 'tavern.chat_backgrounds.v1',
+        directoryName: 'tavern_chat_backgrounds',
+        builtIns: chatBackgroundBuiltIns,
+      );
   static const _virtualPhoneShortcutKey = 'virtual_phone.settings_shortcut.v1';
   SettingsSection? _virtualPhoneSettingsShortcut;
   VirtualPhoneCarrier? _virtualPhoneCarrier;
@@ -1264,6 +1282,7 @@ class AppController extends ChangeNotifier {
       jsonEncode(controller.virtualPhoneCarrier.toJson()),
     );
     await controller.virtualPhoneWallpapers.load();
+    await controller.chatBackgrounds.load();
     controller.frameRate.setMode(controller.frameRateMode, force: true);
     await controller._hydrateMessageAttachments();
     return controller;
@@ -4498,6 +4517,49 @@ $japanesePunctuationRule
     frameRate.setMode(frameRateMode, force: true);
     messages = candidate.messages;
     _changed();
+    await restoreChatBackgroundFromBackup(data);
+  }
+
+  /// Tavern edition: optional backup field `tavernChatBackground`. Old apps
+  /// ignore the unknown key, so backups stay importable both ways. Only an
+  /// imported image is embedded (PNG, at most [_maxBackupBackgroundBytes]).
+  static const _maxBackupBackgroundBytes = 8 * 1024 * 1024;
+
+  Map<String, dynamic>? chatBackgroundForBackup() {
+    final selected = chatBackgrounds.selected;
+    if (selected.isBuiltIn) return {'version': 1, 'builtInId': selected.id};
+    try {
+      final bytes = File(selected.filePath!).readAsBytesSync();
+      if (bytes.length > _maxBackupBackgroundBytes) return null;
+      return {'version': 1, 'name': selected.name, 'png': base64Encode(bytes)};
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> restoreChatBackgroundFromBackup(
+    Map<String, dynamic> data,
+  ) async {
+    final value = data['tavernChatBackground'];
+    if (value is! Map) return;
+    try {
+      final builtIn = value['builtInId'];
+      if (builtIn is String &&
+          chatBackgrounds.wallpapers.any((w) => w.id == builtIn)) {
+        await chatBackgrounds.select(builtIn);
+        return;
+      }
+      final png = value['png'];
+      if (png is! String || png.length > _maxBackupBackgroundBytes * 2) return;
+      final name = value['name'];
+      await chatBackgrounds.importImage(
+        base64Decode(png),
+        filename: name is String ? name : null,
+      );
+    } on Object catch (error, stack) {
+      // A background that cannot be restored must not fail the data import.
+      RuntimeLog.instance.error('ChatBackground', error, stack);
+    }
   }
 
   Future<void> _importGameState(Map<String, dynamic> data) async {
@@ -6418,6 +6480,7 @@ $japanesePunctuationRule
   void dispose() {
     _npcMessaging?.dispose();
     virtualPhoneWallpapers.dispose();
+    chatBackgrounds.dispose();
     frameRate.dispose();
     super.dispose();
   }

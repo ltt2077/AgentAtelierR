@@ -1,5 +1,7 @@
 # AgentAtelierR 酒馆版（Tavern Edition）
 
+当前版本：**1.0.4.2-tavern**（Android `versionCode` 46）。
+
 > **仅供成年人使用（18+）。** 预置角色卡包含露骨的成人内容设定，所有角色均为明确的成年人。
 
 本分支基于 [onion-aqua/AgentAtelierR](https://github.com/onion-aqua/AgentAtelierR)（提交 `933a54d`，版本 1.0.4.1 MCP FishAudio）改造。原作者及原版全部功能、界面与代码归原作者所有。本分支只做尽量小的改动，把原有的「人物卡 / 世界书 / 用户设定」槽位改成通用的酒馆（类 SillyTavern）角色扮演用法，原版界面不变。
@@ -17,6 +19,8 @@
 | 安装身份 | Android 包名 `com.ltt2077.agentatelierr.tavern`，应用名「AgentAtelierR 酒馆版」，用新签名。Windows 程序名 `AgentAtelierRTavern.exe`，CompanyName/ProductName 也换了，数据目录因此独立。|
 | OAuth 回调 | Fish Audio MCP 的回调协议从 `fishmcp://` 改成 `fishmcptavern://`，两个版本同时安装也不会抢回调。|
 | 公开源码可构建 | 原版依赖作者本地定制的 Spine 运行时和私有素材。本分支增加了：`tool/prepare_public_build.py`（从 pub.dev 下载 spine_flutter 4.2.36 并打补丁）、`tool/apply_spine_tavern_compat_patch.py`（补齐 `targetFramesPerSecond`、`updateDelta` 等接口），以及缺失数据文件（`runtime_prompts.json`、地图 JSON）的空回退，缺文件时应用不会在启动时崩溃。|
+| 主界面（1.0.4.2 起） | **文字优先**：去掉了 Spine 骨骼动画、立绘和角色舞台区，主界面只剩背景图和聊天面板，面板默认展开得更高（仍可拖动调整或全屏）。原版的附件功能（拍照、发图片、发文件）保持不变，在输入框旁的「＋」按钮里。表演标签（动作、表情）在没有动画时会被安全忽略。|
+| 聊天背景（1.0.4.2 起） | 内置一张原创背景图「酒馆夜色」（`assets/tavern/default_background.jpg`，本分支用程序生成，无版权素材）。在 **设置 → 外观 → 聊天背景** 里可以导入自己的图片替换，导入的图会自动缩放并保存在应用数据里，重启后保留。|
 
 ## 槽位列表
 
@@ -60,6 +64,7 @@
 - **原版 → 酒馆版**：原版导出的完整备份 JSON（`agent-atelier-r-local-backup`，version 1）和存档 JSON（`agent-atelier-r-save-slot`）都能直接导入。旧的 5 个槽位依次对应槽位 1–5，原来启用的槽位保持启用。旧备份里空着的槽位和新增的槽位 6–20 都显示预设卡。旧备份里槽位 2–5 的自定义人物按原版方式注入。
 - **酒馆版 → 酒馆版**：20 个槽位完整往返。每组槽位带 `"version": 2` 字段，顶层格式和 `version: 1` 不变。
 - **酒馆版 → 原版**（尽量兼容）：原版能导入不报错，但只读取前 5 个槽位。当前启用的设定正文会照常恢复，启用编号超过 5 时，在原版里显示为槽位 5。
+- **聊天背景**（1.0.4.2 起）：完整备份里多一个可选字段 `tavernChatBackground`。内置背景只记编号，导入的背景以 PNG（base64，不超过 8 MB）嵌入。原版和 1.0.4.1 会忽略这个字段，正常导入；字段缺失或损坏时不影响其余数据的导入。
 - 测试：`test/tavern_backup_compat_test.dart`。用到的两个 fixture（`test/fixtures/original_v1_*.json`）由**未修改的原版源码**真实导出。另外还在原版代码上反向导入过酒馆版备份，验证通过。
 
 ## 重新构建
@@ -69,7 +74,7 @@
 ```bash
 python tool/prepare_public_build.py        # 下载并修补 Spine 运行时，创建空素材目录
 flutter pub get
-flutter test test/tavern_backup_compat_test.dart test/settings_slots_test.dart
+flutter test test/tavern_backup_compat_test.dart test/settings_slots_test.dart test/sophie_chat_screen_test.dart
 
 # Android：android/key.properties 指向你自己的 keystore（不要提交）
 #   storeFile=/绝对路径/tavern-release.jks

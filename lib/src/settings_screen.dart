@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'app_audio_player.dart';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'ai_services.dart';
 import 'relay/relay_service.dart';
 import 'relay/relay_chat_page.dart';
+import 'virtual_phone_wallpaper_page.dart';
 import 'app_controller.dart';
 import 'app_localization.dart';
 import 'app_theme.dart';
@@ -425,6 +427,24 @@ class SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(controller.accentTheme.label(language)),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _showAccentThemes(context),
+                ),
+                ListTile(
+                  key: const ValueKey('settings-chat-background'),
+                  leading: const Icon(Icons.wallpaper_rounded),
+                  title: Text(
+                    language.text('聊天背景', 'Chat background', 'チャット背景'),
+                  ),
+                  subtitle: Text(controller.chatBackgrounds.selected.name),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openDetailPage<void>(
+                    context: context,
+                    builder: (context) => VirtualPhoneWallpaperPage(
+                      store: controller.chatBackgrounds,
+                      language: language,
+                      liquidGlass: controller.liquidGlassChatUi,
+                      title: language.text('聊天背景', 'Chat background', 'チャット背景'),
+                    ),
+                  ),
                 ),
                 ListTile(
                   leading: const Icon(Icons.translate_rounded),
@@ -1332,9 +1352,9 @@ class SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('AgentAtelierR 酒馆版'),
                   subtitle: Text(
                     language.text(
-                      '版本 1.0.4.1 MCP FishAudio',
-                      'Version 1.0.4.1 MCP FishAudio',
-                      'バージョン 1.0.4.1 MCP FishAudio',
+                      '酒馆版 1.0.4.2-tavern（基于 1.0.4.1 MCP FishAudio）',
+                      'Tavern 1.0.4.2-tavern (based on 1.0.4.1 MCP FishAudio)',
+                      '酒場版 1.0.4.2-tavern（1.0.4.1 MCP FishAudio ベース）',
                     ),
                   ),
                 ),
@@ -3515,6 +3535,9 @@ class SettingsScreenState extends State<SettingsScreen> {
     if (includeKeys == null || !context.mounted) return;
     try {
       final data = controller.exportData(includeAttachmentThumbnails: true);
+      if (controller.chatBackgroundForBackup() case final background?) {
+        data['tavernChatBackground'] = background;
+      }
       if (includeKeys) {
         data[ServiceApiBackup.field] = await ServiceApiBackup.capture(
           const SecretStore(),

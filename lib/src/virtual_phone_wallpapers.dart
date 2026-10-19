@@ -30,19 +30,30 @@ class VirtualPhoneWallpaperStore extends ChangeNotifier {
   VirtualPhoneWallpaperStore({
     required SharedPreferences preferences,
     Future<Directory> Function()? directoryProvider,
+    // Tavern edition: the same store also backs the chat background, with its
+    // own preference key, directory and built-in images.
+    String preferenceKey = defaultPreferenceKey,
+    String directoryName = 'virtual_phone_wallpapers',
+    List<VirtualPhoneWallpaper> builtIns = defaultBuiltIns,
     // Preserve the public named argument and private storage field.
     // ignore: prefer_initializing_formals
   }) : _preferences = preferences,
-       _directoryProvider = directoryProvider ?? _defaultDirectory;
+       _preferenceKey = preferenceKey,
+       _builtIns = builtIns,
+       _wallpapers = [...builtIns],
+       _selectedId = builtIns.first.id,
+       _directoryProvider =
+           directoryProvider ?? (() => _defaultDirectory(directoryName));
 
-  static const _preferenceKey = 'virtual_phone.wallpapers.v1';
+  static const defaultPreferenceKey = 'virtual_phone.wallpapers.v1';
+  final String _preferenceKey;
   static const _maxInputBytes = 24 * 1024 * 1024;
   static const _maxSourceEdge = 8192;
   static const _maxSourcePixels = 32000000;
   static const _maxStoredEdge = 2560;
   static final _importId = RegExp(r'^imported-[0-9a-f]{32}$');
   static final _random = math.Random.secure();
-  static const _builtIns = <VirtualPhoneWallpaper>[
+  static const defaultBuiltIns = <VirtualPhoneWallpaper>[
     VirtualPhoneWallpaper(
       id: 'builtin-bg1',
       name: '海边工坊',
@@ -60,10 +71,11 @@ class VirtualPhoneWallpaperStore extends ChangeNotifier {
     ),
   ];
 
+  final List<VirtualPhoneWallpaper> _builtIns;
   final SharedPreferences _preferences;
   final Future<Directory> Function() _directoryProvider;
-  List<VirtualPhoneWallpaper> _wallpapers = [..._builtIns];
-  String _selectedId = _builtIns.first.id;
+  List<VirtualPhoneWallpaper> _wallpapers;
+  String _selectedId;
   Future<void> _operations = Future<void>.value();
   Directory? _directory;
   bool _loaded = false;
@@ -251,11 +263,9 @@ class VirtualPhoneWallpaperStore extends ChangeNotifier {
     _notify();
   }
 
-  static Future<Directory> _defaultDirectory() async {
+  static Future<Directory> _defaultDirectory(String name) async {
     final support = await getApplicationSupportDirectory();
-    return Directory(
-      '${support.path}${Platform.pathSeparator}virtual_phone_wallpapers',
-    );
+    return Directory('${support.path}${Platform.pathSeparator}$name');
   }
 
   Future<Directory> _managedDirectory() async {

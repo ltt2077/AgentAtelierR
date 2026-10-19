@@ -207,48 +207,68 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Sophie uses her portrait without mounting Ryza Spine', (
-    tester,
-  ) async {
-    SharedPreferences.setMockInitialValues({
-      'active_character_id_v1': 'sophie',
-    });
-    final controller = await AppController.load();
+  testWidgets(
+    'tavern text-first stage shows the background without portrait or Spine',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'active_character_id_v1': 'sophie',
+      });
+      final controller = await AppController.load();
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          controller: controller,
-          onMenuPressed: () {},
-          onShopPressed: () {},
-          hideUi: false,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            controller: controller,
+            onMenuPressed: () {},
+            onShopPressed: () {},
+            hideUi: false,
+          ),
         ),
-      ),
-    );
+      );
 
-    expect(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is Image &&
-            widget.image is AssetImage &&
-            (widget.image as AssetImage).assetName ==
-                'assets/images/characters/sophie_portrait.png',
-      ),
-      findsOneWidget,
-    );
-    expect(find.byType(CharacterCamera), findsNothing);
-    expect(find.byType(SpineWidget), findsNothing);
-    expect(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is TextField && widget.decoration?.hintText == '和苏菲说点什么…',
-      ),
-      findsOneWidget,
-    );
+      expect(
+        find.byKey(const ValueKey('tavern-chat-background')),
+        findsOneWidget,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Image &&
+              widget.image is AssetImage &&
+              (widget.image as AssetImage).assetName ==
+                  'assets/tavern/default_background.jpg',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Image &&
+              widget.image is AssetImage &&
+              (widget.image as AssetImage).assetName ==
+                  'assets/images/characters/sophie_portrait.png',
+        ),
+        findsNothing,
+      );
+      expect(find.byType(CharacterCamera), findsNothing);
+      expect(find.byType(SpineWidget), findsNothing);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField && widget.decoration?.hintText == '和苏菲说点什么…',
+        ),
+        findsOneWidget,
+      );
+      // The original attachment menu (photo / image / file) stays reachable.
+      await tester.tap(find.byIcon(Icons.add_rounded).last);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byIcon(Icons.camera_alt_outlined), findsWidgets);
+      expect(find.byIcon(Icons.image_outlined), findsWidgets);
 
-    await tester.pumpWidget(const SizedBox.shrink());
-    controller.dispose();
-  });
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    },
+  );
 
   testWidgets('conversation replacement clears every composer draft', (
     tester,

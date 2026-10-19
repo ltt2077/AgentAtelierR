@@ -35,87 +35,99 @@ void main() {
     expect(tavernPresets.map((p) => p.name).toSet().length, 19);
   });
 
-  test('fresh install: slot 1 is the original default, 2-20 are presets', () async {
-    SharedPreferences.setMockInitialValues({});
-    final c = await AppController.load();
-    addTearDown(c.dispose);
-    final character = c.settingsSlots(SettingsSlotKind.character);
-    final world = c.settingsSlots(SettingsSlotKind.world);
-    expect(character.active, 0);
-    expect(c.editableCharacterPersona, defaultCharacterPersona);
-    for (var i = 1; i < SettingsSlots.count; i++) {
-      expect(character.entries[i]?['text'], tavernPresets[i - 1].persona);
-      expect(world.entries[i]?['text'], tavernPresets[i - 1].worldBody);
-    }
-    expect(
-      c.settingsSlots(SettingsSlotKind.user).entries.skip(1),
-      everyElement(isNull),
-    );
-    // Original slot 1 prompt keeps the original wording and rules.
-    expect(c.tavernModeActive, isFalse);
-    expect(c.buildCharacterPrompt(), contains('你扮演莱莎'));
+  test(
+    'fresh install: slot 1 is the original default, 2-20 are presets',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final c = await AppController.load();
+      addTearDown(c.dispose);
+      final character = c.settingsSlots(SettingsSlotKind.character);
+      final world = c.settingsSlots(SettingsSlotKind.world);
+      expect(character.active, 0);
+      expect(c.editableCharacterPersona, defaultCharacterPersona);
+      for (var i = 1; i < SettingsSlots.count; i++) {
+        expect(character.entries[i]?['text'], tavernPresets[i - 1].persona);
+        expect(world.entries[i]?['text'], tavernPresets[i - 1].worldBody);
+      }
+      expect(
+        c.settingsSlots(SettingsSlotKind.user).entries.skip(1),
+        everyElement(isNull),
+      );
+      // Original slot 1 prompt keeps the original wording and rules.
+      expect(c.tavernModeActive, isFalse);
+      expect(c.buildCharacterPrompt(), contains('你扮演莱莎'));
 
-    // Choosing tavern slot 7 also moves the world book off the original slot.
-    c.saveSettingsSlots(SettingsSlotKind.character, character..active = 6);
-    expect(c.characterPersona, tavernPresets[5].persona);
-    expect(c.settingsSlots(SettingsSlotKind.world).active, 6);
-    expect(c.worldSetting, tavernPresets[5].worldBody);
-    expect(c.tavernModeActive, isTrue);
-    final prompt = c.buildCharacterPrompt();
-    expect(prompt, contains('成年向酒馆角色扮演'));
-    expect(prompt, isNot(contains('非露骨')));
-    expect(prompt, isNot(contains('你扮演莱莎，')));
-    expect(prompt, contains('瓦瑟琳'));
-  });
+      // Choosing tavern slot 7 also moves the world book off the original slot.
+      c.saveSettingsSlots(SettingsSlotKind.character, character..active = 6);
+      expect(c.characterPersona, tavernPresets[5].persona);
+      expect(c.settingsSlots(SettingsSlotKind.world).active, 6);
+      expect(c.worldSetting, tavernPresets[5].worldBody);
+      expect(c.tavernModeActive, isTrue);
+      final prompt = c.buildCharacterPrompt();
+      expect(prompt, contains('成年向酒馆角色扮演'));
+      expect(prompt, isNot(contains('非露骨')));
+      expect(prompt, isNot(contains('你扮演莱莎，')));
+      expect(prompt, contains('瓦瑟琳'));
+    },
+  );
 
-  test('original v1 backup imports into slots 1-5, 6-20 stay default', () async {
-    SharedPreferences.setMockInitialValues({});
-    final c = await AppController.load();
-    addTearDown(c.dispose);
-    final backup = _fixture('original_v1_backup.json');
-    expect(backup['format'], 'agent-atelier-r-local-backup');
-    expect(backup['version'], 1);
-    expect((backup['settingsSlots'] as Map)['character'], isNot(contains('version')));
-    await c.importData(backup);
+  test(
+    'original v1 backup imports into slots 1-5, 6-20 stay default',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final c = await AppController.load();
+      addTearDown(c.dispose);
+      final backup = _fixture('original_v1_backup.json');
+      expect(backup['format'], 'agent-atelier-r-local-backup');
+      expect(backup['version'], 1);
+      expect(
+        (backup['settingsSlots'] as Map)['character'],
+        isNot(contains('version')),
+      );
+      await c.importData(backup);
 
-    final character = c.settingsSlots(SettingsSlotKind.character);
-    final world = c.settingsSlots(SettingsSlotKind.world);
-    final user = c.settingsSlots(SettingsSlotKind.user);
-    expect(character.active, 4);
-    expect(c.characterPersona, '旧版槽位5人物');
-    expect(character.entries[0]?['text'], '旧版槽位1人物');
-    expect(character.entries[1]?['text'], '旧版槽位2人物');
-    expect(character.entries[4]?['text'], '旧版槽位5人物');
-    // Unused old slots and the new slots 6-20 fall back to tavern presets.
-    expect(character.entries[2]?['text'], tavernPresets[1].persona);
-    for (var i = SettingsSlots.legacyCount; i < SettingsSlots.count; i++) {
-      expect(character.entries[i]?['text'], tavernPresets[i - 1].persona);
-      expect(world.entries[i]?['text'], tavernPresets[i - 1].worldBody);
-      expect(user.entries[i], isNull);
-    }
-    expect(world.active, 3);
-    expect(c.worldSetting, '旧版槽位4世界');
-    expect(world.entries[0]?['text'], '旧版槽位1世界');
-    expect(user.entries[2]?['address'], '旧版槽位3称呼');
-    expect(c.userAddress, '旧版称呼');
-    // Custom old slot 5 has no tavern header: keep the original identity.
-    expect(c.tavernModeActive, isFalse);
-    expect(c.buildCharacterPrompt(), contains('旧版槽位5人物'));
-  });
+      final character = c.settingsSlots(SettingsSlotKind.character);
+      final world = c.settingsSlots(SettingsSlotKind.world);
+      final user = c.settingsSlots(SettingsSlotKind.user);
+      expect(character.active, 4);
+      expect(c.characterPersona, '旧版槽位5人物');
+      expect(character.entries[0]?['text'], '旧版槽位1人物');
+      expect(character.entries[1]?['text'], '旧版槽位2人物');
+      expect(character.entries[4]?['text'], '旧版槽位5人物');
+      // Unused old slots and the new slots 6-20 fall back to tavern presets.
+      expect(character.entries[2]?['text'], tavernPresets[1].persona);
+      for (var i = SettingsSlots.legacyCount; i < SettingsSlots.count; i++) {
+        expect(character.entries[i]?['text'], tavernPresets[i - 1].persona);
+        expect(world.entries[i]?['text'], tavernPresets[i - 1].worldBody);
+        expect(user.entries[i], isNull);
+      }
+      expect(world.active, 3);
+      expect(c.worldSetting, '旧版槽位4世界');
+      expect(world.entries[0]?['text'], '旧版槽位1世界');
+      expect(user.entries[2]?['address'], '旧版槽位3称呼');
+      expect(c.userAddress, '旧版称呼');
+      // Custom old slot 5 has no tavern header: keep the original identity.
+      expect(c.tavernModeActive, isFalse);
+      expect(c.buildCharacterPrompt(), contains('旧版槽位5人物'));
+    },
+  );
 
-  test('original v1 game save imports and keeps its active slot indices', () async {
-    SharedPreferences.setMockInitialValues({});
-    final c = await AppController.load();
-    addTearDown(c.dispose);
-    final save = _fixture('original_v1_game_save.json');
-    expect(save['format'], 'agent-atelier-r-save-slot');
-    await c.importLocalSlot(1, save);
-    await c.loadFromLocalSlot(1);
-    expect(c.settingsSlots(SettingsSlotKind.character).active, 4);
-    expect(c.characterPersona, '旧版槽位5人物');
-    expect(c.settingsSlots(SettingsSlotKind.world).active, 3);
-    expect(c.worldSetting, '旧版槽位4世界');
-  });
+  test(
+    'original v1 game save imports and keeps its active slot indices',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final c = await AppController.load();
+      addTearDown(c.dispose);
+      final save = _fixture('original_v1_game_save.json');
+      expect(save['format'], 'agent-atelier-r-save-slot');
+      await c.importLocalSlot(1, save);
+      await c.loadFromLocalSlot(1);
+      expect(c.settingsSlots(SettingsSlotKind.character).active, 4);
+      expect(c.characterPersona, '旧版槽位5人物');
+      expect(c.settingsSlots(SettingsSlotKind.world).active, 3);
+      expect(c.worldSetting, '旧版槽位4世界');
+    },
+  );
 
   test('new v2 backup round-trips all 20 slots', () async {
     SharedPreferences.setMockInitialValues({});
@@ -154,7 +166,10 @@ void main() {
     final entries = List.generate(20, (i) => {'text': '槽$i'});
     final v1 = SettingsSlots.fromJson({'active': 12, 'entries': entries});
     expect(v1.active, SettingsSlots.legacyCount - 1);
-    expect(v1.entries.where((e) => e != null).length, SettingsSlots.legacyCount);
+    expect(
+      v1.entries.where((e) => e != null).length,
+      SettingsSlots.legacyCount,
+    );
     final v2 = SettingsSlots.fromJson({
       'version': 2,
       'active': 12,
@@ -164,5 +179,30 @@ void main() {
     expect(v2.entries[19]?['text'], '槽19');
     expect(SettingsSlots.versionOf({'version': 'x'}), 1);
     expect(SettingsSlots.versionOf(null), 1);
+  });
+
+  test('chat background backup field is optional and fault tolerant', () async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = await AppController.load();
+    addTearDown(controller.dispose);
+    expect(controller.chatBackgrounds.selected.id, 'tavern-default');
+    expect(controller.chatBackgroundForBackup(), {
+      'version': 1,
+      'builtInId': 'tavern-default',
+    });
+    // Original v1 backups carry no background field: nothing changes.
+    await controller.importData(_fixture('original_v1_backup.json'));
+    expect(controller.chatBackgrounds.selected.id, 'tavern-default');
+    // Malformed payloads never fail the import.
+    await controller.restoreChatBackgroundFromBackup({
+      'tavernChatBackground': {'version': 1, 'png': '%%%not-base64%%%'},
+    });
+    await controller.restoreChatBackgroundFromBackup({
+      'tavernChatBackground': 'garbage',
+    });
+    await controller.restoreChatBackgroundFromBackup({
+      'tavernChatBackground': {'builtInId': 'tavern-default'},
+    });
+    expect(controller.chatBackgrounds.selected.id, 'tavern-default');
   });
 }
